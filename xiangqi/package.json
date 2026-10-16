@@ -1,0 +1,13 @@
+{
+  "name": "yibu-xiangqi-tutor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "弈步：在对弈中学会中国象棋",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "start": "node scripts/serve.mjs",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=20" }
+}
