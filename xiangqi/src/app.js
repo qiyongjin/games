@@ -2,6 +2,9 @@ import { PIECE_LABELS, PIECE_RULES, generateLegalMoves, validateMove, inCheck, g
 import { createSession, commitMove, undoRound, saveSession, loadSession } from './session.js';
 import { describeSquare, explainMove } from './coach.js';
 import { createLocalOpponent } from './opponent.js';
+import { initializeFloatingRules } from './floating-rules.js';
+import { initializeFeedback } from './feedback.js';
+import { createOnlineClient, initializeVisitTracking, requestJSON } from './network.js';
 
 const $ = id => document.getElementById(id);
 const sideName = side => side === 'red' ? '红方' : '黑方';
@@ -10,6 +13,20 @@ const svgNS = 'http://www.w3.org/2000/svg';
 const opponent = createLocalOpponent();
 const restored = loadSession();
 let session = restored.session ?? createSession();
+let soloSession = session;
+let onlineRoom = null;
+const invitedRoomId = new URLSearchParams(location.search).get('room');
+let onlineJoining = !!invitedRoomId;
+let onlineBusy = false;
+let onlineError = '';
+let visitReady = Promise.resolve();
+let gameId;
+try { gameId = localStorage.getItem('xiangqi-game-id:v1'); } catch { /* Optional statistics key. */ }
+function newGameId() {
+  gameId = crypto.randomUUID?.() ?? [...crypto.getRandomValues(new Uint8Array(16))].map(value => value.toString(16).padStart(2, '0')).join('');
+  try { localStorage.setItem('xiangqi-game-id:v1', gameId); } catch { /* Local play still works. */ }
+}
+if (!gameId || !restored.session) newGameId();
 let selected = null;
 let inspected = null;
 let related = [];
@@ -23,6 +40,65 @@ let keyboardSquare = 87;
 let historyRenderKey = '';
 let coachRenderKey = '';
 const squareButtons = [];
+const isOnline = () => !!onlineRoom || onlineJoining;
+const playerSide = () => onlineRoom?.you ?? 'red';
+const bothOnline = () => onlineRoom?.players.red.online && onlineRoom?.players.black.online;
+const canPlay = () => !session.outcome && !onlineBusy && !onlineJoining && !onlineError
+  && session.position.turn === playerSide() && (!onlineRoom || onlineRoom.phase === 'playing' && bothOnline());
+const onlineClient = createOnlineClient({
+  onUpdate(room) {
+    const changed = !onlineRoom || onlineRoom.id !== room.id || onlineRoom.moves.length !== room.moves.length;
+    onlineRoom = room; onlineJoining = false; onlineError = '';
+    if (changed) {
+      cancelTask(); clearSelection();
+      let next = createSession({ teaching: session.teaching, difficulty: session.difficulty });
+      for (const move of room.moves) next = commitMove(next, move);
+      session = next;
+    }
+    if (room.outcome) session = { ...session, outcome: room.outcome };
+    render();
+  },
+  onError(error) { onlineError = error.message || '连接中断，正在重连。'; render(); },
+});
+
+function reportComputerGame() {
+  if (isOnline() || !session.records.length) return;
+  const payload = { gameId, mode: 'computer' };
+  const moves = session.outcome ? session.records.map(record => record.move) : null;
+  void visitReady.then(async () => {
+    await requestJSON('/api/activity', { body: { ...payload, type: 'game-start' } });
+    if (moves) await requestJSON('/api/activity', { body: { ...payload, type: 'game-finish', moves } });
+  }).catch(() => {});
+}
+
+async function enterOnline(id = null) {
+  if (onlineBusy) return;
+  if (onlineRoom) { await copyInvite(); return; }
+  soloSession = session; cancelTask(); clearSelection();
+  onlineJoining = true; onlineBusy = true; onlineError = ''; showNotice(''); render();
+  try { await visitReady; if (id) await onlineClient.join(id); else await onlineClient.create(); }
+  catch (error) {
+    await onlineClient.leave(); onlineJoining = false;
+    showNotice(error.message || '暂时无法创建棋局，请稍后重试。', true);
+  } finally {
+    onlineBusy = false; render();
+    if (!isOnline() && session.position.turn === 'black' && !session.outcome) void requestComputerMove();
+  }
+}
+
+async function runOnline(action) {
+  if (onlineBusy) return;
+  onlineBusy = true; render();
+  try { await action(); showNotice(''); }
+  catch (error) { showNotice(error.message || '操作未完成，请稍后重试。', true); await onlineClient.sync().catch(() => {}); }
+  finally { onlineBusy = false; render(); }
+}
+
+async function copyInvite() {
+  const field = $('invite-link');
+  try { await navigator.clipboard.writeText(field.value); showNotice('邀请链接已复制，发给好友后，请双方点击“准备开始”。'); }
+  catch { field.focus(); field.select(); showNotice('请长按或选中邀请链接复制，再发送给好友。'); }
+}
 
 function svgElement(name, attributes) {
   const element = document.createElementNS(svgNS, name);
@@ -103,10 +179,13 @@ function cancelTask() {
 }
 
 function persist() {
-  if (!saveSession(session) && !storageWarned) {
+  if (isOnline()) soloSession = { ...soloSession, teaching: session.teaching, difficulty: session.difficulty };
+  else soloSession = session;
+  if (!saveSession(soloSession) && !storageWarned) {
     storageWarned = true;
     showNotice('浏览器暂时不能保存进度。你仍然可以下棋，刷新后会重新开始。');
   }
+  reportComputerGame();
 }
 
 function showNotice(message, error = false) {
@@ -116,10 +195,15 @@ function showNotice(message, error = false) {
 }
 
 function initialCoach() {
+  if (isOnline()) return {
+    title: '与好友，一起切磋。', kicker: `好友对弈 · 你执${sideName(playerSide())}`,
+    rule: '分享邀请链接，双方进入并点击“准备开始”后，由红方先走。',
+    effect: '双方在线时才能落子；临时断线会暂停，回到这个页面可继续。棋盘黑方在上，红方在下。',
+  };
   return {
     title: '每一步，都有门道。', kicker: '第一课 · 认识棋子',
     rule: '点击一枚红棋，看看它的走法。棋盘上的小圆点，就是它可以去的地方。',
-    effect: '棋子放在线的交叉点上。你执红先走，电脑会等你读完讲解再应手。',
+    effect: '棋子放在线的交叉点上。你执红先走，落子后电脑会自动应手。',
     detail: '每次只移动一枚棋子，红黑双方轮流走。走到对方棋子的位置就能吃掉它，但不能吃自己的棋子。箭头键可以在棋盘上移动焦点，回车键选子或落子。',
   };
 }
@@ -129,12 +213,12 @@ function currentCoach() {
   if (session.outcome) return {
     title: session.outcome.title, kicker: '这一局 · 有所收获',
     rule: session.outcome.message,
-    effect: session.outcome.reason === 'stalemate' ? '中国象棋中，没有任何合法走法的一方也会输，这叫“困毙”。' : '你可以悔棋看看另一种走法，也可以重新开始，把刚学会的规则再练一遍。',
+    effect: isOnline() ? '可以返回电脑对弈，或重新创建邀请，和好友再来一局。' : session.outcome.reason === 'stalemate' ? '中国象棋中，没有任何合法走法的一方也会输，这叫“困毙”。' : '你可以悔棋看看另一种走法，也可以重新开始，把刚学会的规则再练一遍。',
   };
   if (!session.teaching) return {
     title: '专心下棋，随时求助。', kicker: '自由对弈 · 教学已关闭',
-    rule: '电脑会自动应手。选中棋子仍能查看走法，需要时可以点击“给我一点提示”。',
-    effect: '想慢下来理解每一步，随时打开右上方的教学开关。',
+    rule: isOnline() ? '等待双方按顺序落子，选中自己的棋子仍能查看合法走法。' : '电脑会自动应手。选中棋子仍能查看走法，需要时可以点击“给我一点提示”。',
+    effect: '想了解每一步的规则与思路，随时打开右上方的教学开关。',
   };
   const last = session.records.at(-1);
   if (last) return { ...last.explanation, kicker: `${sideName(last.before.turn)}落子 · 第 ${session.records.length} 步` };
@@ -142,7 +226,7 @@ function currentCoach() {
 }
 
 function renderBoard() {
-  const legal = selected === null || session.position.turn !== 'red' || session.outcome || task?.kind === 'ai' ? [] : generateLegalMoves(session.position, selected);
+  const legal = selected === null || !canPlay() || task?.kind === 'ai' ? [] : generateLegalMoves(session.position, selected);
   const legalSet = new Set(legal.map(move => move.to));
   const last = session.records.at(-1)?.move;
   const lesson = session.records.at(-1)?.explanation;
@@ -163,7 +247,7 @@ function renderBoard() {
       'in-check': checked.has(index),
       'hint-from': hint?.from === index,
       'hint-to': hint?.to === index,
-      readonly: session.position.turn !== 'red' || !!session.outcome || task?.kind === 'ai',
+      readonly: !canPlay() || task?.kind === 'ai',
     };
     for (const [className, enabled] of Object.entries(flags)) button.classList.toggle(className, !!enabled);
     button.setAttribute('aria-label', `${piece ? sideName(piece.side) + PIECE_LABELS[piece.side][piece.type] : '空位'}，${squareName(index)}${legalSet.has(index) ? '，可' + (piece ? '吃子' : '移动') : ''}`);
@@ -203,7 +287,7 @@ function renderCoach() {
   document.querySelector('.coach-card').classList.toggle('error', view.tone === 'error');
   document.querySelector('.coach-card').classList.toggle('finished', !!session.outcome);
   document.querySelector('.coach-card').classList.toggle('teaching-off', !session.teaching);
-  $('coach-footer-text').textContent = session.position.turn === 'black' && !task && !session.outcome && session.teaching ? '读完了吗？点“让电脑走”，看看对手的选择。' : '先懂规则，再慢慢发现下棋的乐趣。';
+  $('coach-footer-text').textContent = isOnline() ? '红黑双方轮流落子；双方在线时才能继续对局。' : '红方落子后，电脑会自动应手；走棋记录中可以回看讲解。';
 }
 
 function renderControls() {
@@ -220,6 +304,7 @@ function renderControls() {
   $('move-counter').textContent = `第 ${Math.floor(session.records.length / 2) + 1} 回合`;
   $('human-caption').textContent = finished ? '每一局，都是一次练习' : checked && !blackTurn ? '先保护好你的帅' : '不急，想好了再落子';
   $('undo-button').disabled = session.records.length === 0;
+  $('restart-button').disabled = false;
   $('primary-action').disabled = !!task;
   let title, description, primary, footnote;
   if (finished) {
@@ -227,13 +312,63 @@ function renderControls() {
   } else if (task) {
     title = task.kind === 'ai' ? '电脑正在想一想' : '帮你找一个方向'; description = '棋盘会等一等，你仍然可以悔棋或重新开始。'; primary = task.kind === 'ai' ? '电脑思考中…' : '正在寻找提示…'; footnote = '每一步都经过同样的规则检查。';
   } else if (blackTurn) {
-    title = failedAI ? '再让电脑试一次' : session.teaching ? '先看看这一步的讲解' : '准备电脑回合'; description = failedAI ? '刚才的计算没有完成，棋盘已保留。' : '读完后，让电脑继续。下一步又轮到你。'; primary = failedAI ? '重试电脑落子' : '让电脑走'; footnote = '节奏由你掌握，学明白再继续。';
+    title = failedAI ? '再让电脑试一次' : '准备电脑回合'; description = failedAI ? '刚才的计算没有完成，棋盘已保留。' : '电脑会自动应手，走完后就轮到你。'; primary = failedAI ? '重试电脑落子' : '电脑即将落子'; footnote = '每一步的讲解都可以在走棋记录中回看。';
   } else {
     title = checked ? '你的帅被将军了' : '轮到你落子'; description = checked ? '这一步需要解除威胁，合法落点已经为你筛选。' : hint ? '箭头标出了一个建议，试着想想它的作用。' : '选一枚红棋，探索它能走到哪里。'; primary = hint ? '换个角度看看提示' : '给我一点提示'; footnote = '提示只给方向，每一步仍由你决定。';
   }
   $('status-title').textContent = title; $('status-description').textContent = description;
   $('primary-label').textContent = primary; $('control-footnote').textContent = footnote;
   $('status-indicator').style.background = finished ? '#b07b54' : task ? '#b59d64' : '#73916b';
+  $('online-panel').hidden = !isOnline();
+  $('game-mode-label').textContent = isOnline() ? '好友对弈' : '人机对弈';
+  $('opponent-name').textContent = isOnline() ? '好友' : '电脑陪练';
+  $('opponent-caption').textContent = isOnline() ? `${sideName(playerSide() === 'red' ? 'black' : 'red')} · 受邀对手` : '黑方 · 和你一起练习';
+  $('human-name').textContent = isOnline() ? `你 · 执${sideName(playerSide())}` : '你';
+  $('human-side-tag').textContent = sideName(playerSide());
+  $('human-side-tag').classList.toggle('red-tag', playerSide() === 'red');
+  const humanAvatar = document.querySelector('.human-row .player-avatar');
+  const opponentAvatar = document.querySelector('.opponent-row .player-avatar');
+  for (const [avatar, side] of [[humanAvatar, playerSide()], [opponentAvatar, playerSide() === 'red' ? 'black' : 'red']]) {
+    avatar.textContent = side === 'red' ? '帅' : '将';
+    avatar.className = `player-avatar ${side}-avatar`;
+  }
+  document.querySelector('.intro-copy').textContent = isOnline() ? `邀请好友，双方准备后开始。你执${sideName(playerSide())}，红方先行。` : '不急着赢，先学会每一步。选一枚红棋，我们一起开始。';
+  $('invite-button').disabled = onlineBusy || onlineJoining;
+  $('difficulty').disabled = isOnline();
+  if (isOnline()) renderOnlineControls();
+}
+
+function renderOnlineControls() {
+  const room = onlineRoom;
+  const waiting = !room || room.phase === 'waiting';
+  const ended = room?.phase === 'finished';
+  const connected = bothOnline();
+  const player = room?.players[playerSide()];
+  const title = onlineJoining ? '正在加入棋局…' : onlineError ? '连接中断，正在重连' : ended ? session.outcome?.title || '棋局已结束' : waiting ? '等待双方准备' : !connected ? '等待好友重新连接' : canPlay() ? `轮到你（${sideName(playerSide())}）落子` : '等待好友落子';
+  $('turn-badge').textContent = title;
+  $('turn-badge').classList.toggle('thinking', onlineBusy || onlineJoining);
+  $('online-status').textContent = onlineError || title;
+  $('online-players').textContent = room ? ['red', 'black'].map(side => {
+    const seat = room.players[side];
+    return `${sideName(side)}${side === room.you ? '（你）' : ''}：${!seat.joined ? '待加入' : !seat.online ? '已离线' : seat.ready ? '已准备' : '在线，未准备'}`;
+  }).join('　·　') : '正在建立连接，请稍候。';
+  const invite = new URL(location.href);
+  if (room) invite.searchParams.set('room', room.id);
+  invite.hash = '';
+  $('invite-link').value = room ? invite.href : '';
+  $('copy-invite').disabled = !room;
+  $('ready-button').textContent = ended ? '对局已结束' : !waiting ? '对局进行中' : player?.ready ? '取消准备' : '准备开始';
+  $('ready-button').disabled = !room || !waiting || onlineBusy || !!onlineError;
+  $('leave-room').disabled = onlineBusy;
+  $('primary-action').disabled = true;
+  $('primary-label').textContent = '好友对弈中';
+  $('undo-button').disabled = true;
+  $('restart-button').disabled = true;
+  $('level-tag').textContent = '联机';
+  $('status-title').textContent = title;
+  $('status-description').textContent = ended ? session.outcome?.message || '可以返回电脑对弈，或重新创建邀请。' : waiting ? '发送邀请链接，双方在线并点击“准备开始”后开局。' : !connected ? '连接恢复后自动继续，本局盘面会保留。' : `你执${sideName(playerSide())}，棋盘黑方在上、红方在下。`;
+  $('human-caption').textContent = `好友对弈 · 你执${sideName(playerSide())}`;
+  $('control-footnote').textContent = '联机对局按双方轮次进行，走法由服务器校验。';
 }
 
 function renderHistory() {
@@ -260,11 +395,11 @@ function renderHistory() {
 function render() { renderBoard(); renderCoach(); renderControls(); renderHistory(); }
 
 function onSquare(index) {
-  if (session.outcome || session.position.turn !== 'red' || task?.kind === 'ai') return;
+  if (!canPlay() || task?.kind === 'ai') return;
   if (task?.kind === 'hint') cancelTask();
   const piece = session.position.board[index];
   hint = null; related = []; inspected = null;
-  if (piece?.side === 'red') {
+  if (piece?.side === playerSide()) {
     if (selected === index) { clearSelection(); render(); return; }
     selected = index;
     const description = describeSquare(session.position, index);
@@ -278,8 +413,8 @@ function onSquare(index) {
   if (selected === null) {
     if (piece) {
       inspected = index;
-      coachView = { ...describeSquare(session.position, index), kicker: `认识对手 · 黑${PIECE_LABELS[piece.side][piece.type]}`, effect: '这是电脑的棋子。红黑双方的对应棋子走法相同，现在请选一枚红棋落子。' };
-    } else coachView = { ...initialCoach(), kicker: '从选子开始', title: '先选一枚你的红棋。', rule: '点击红方棋子，再点击它要去的交叉点。' };
+      coachView = { ...describeSquare(session.position, index), kicker: `认识对手 · ${sideName(piece.side)}${PIECE_LABELS[piece.side][piece.type]}`, effect: `这是对手的棋子。红黑双方的对应棋子走法相同，现在请选一枚${sideName(playerSide())}棋子落子。` };
+    } else coachView = { ...initialCoach(), kicker: '从选子开始', title: '先选一枚你的棋子。', rule: `点击${sideName(playerSide())}棋子，再点击它要去的交叉点。` };
     render(); return;
   }
   const move = { from: selected, to: index };
@@ -293,14 +428,15 @@ function onSquare(index) {
     };
     render(); return;
   }
+  if (isOnline()) { void runOnline(() => onlineClient.move(move)); return; }
   cancelTask();
   session = commitMove(session, move);
   clearSelection(); persist(); render();
-  if (!session.outcome && !session.teaching) void requestComputerMove();
+  if (!session.outcome) void requestComputerMove();
 }
 
 async function requestComputerMove() {
-  if (task || session.outcome || session.position.turn !== 'black') return;
+  if (isOnline() || task || session.outcome || session.position.turn !== 'black') return;
   failedAI = false;
   const controller = new AbortController();
   const key = getPositionKey(session.position), token = revision;
@@ -319,7 +455,7 @@ async function requestComputerMove() {
 }
 
 async function requestHint() {
-  if (task || session.outcome || session.position.turn !== 'red') return;
+  if (isOnline() || task || session.outcome || session.position.turn !== 'red') return;
   const controller = new AbortController();
   const key = getPositionKey(session.position), token = revision;
   const running = { kind: 'hint', controller }; task = running;
@@ -341,7 +477,9 @@ async function requestHint() {
 }
 
 function restart() {
+  if (isOnline()) return;
   cancelTask();
+  newGameId();
   session = createSession({ teaching: session.teaching, difficulty: session.difficulty });
   clearSelection(); showNotice(''); persist(); render();
 }
@@ -376,19 +514,36 @@ $('primary-action').addEventListener('click', () => {
   else void requestHint();
 });
 $('undo-button').addEventListener('click', () => {
-  if (!session.records.length) return;
+  if (isOnline() || !session.records.length) return;
   cancelTask(); session = undoRound(session); clearSelection(); showNotice(''); persist(); render();
 });
 $('restart-button').addEventListener('click', askRestart);
 $('restart-dialog').addEventListener('close', () => { if ($('restart-dialog').returnValue === 'restart') restart(); });
 $('teaching-toggle').addEventListener('change', event => {
   session = { ...session, teaching: event.target.checked }; coachView = null; related = []; persist(); render();
-  if (!session.teaching && session.position.turn === 'black' && !session.outcome && !task) void requestComputerMove();
 });
 $('difficulty').addEventListener('change', event => { session = { ...session, difficulty: event.target.value }; persist(); renderControls(); });
-window.addEventListener('pagehide', () => { cancelTask(); opponent.dispose(); });
+$('invite-button').addEventListener('click', () => void enterOnline());
+$('copy-invite').addEventListener('click', () => void copyInvite());
+$('ready-button').addEventListener('click', () => void runOnline(() => onlineClient.ready(!onlineRoom.players[playerSide()].ready)));
+$('leave-room').addEventListener('click', async () => {
+  if (onlineBusy) return;
+  onlineBusy = true; render();
+  await onlineClient.leave();
+  cancelTask(); clearSelection();
+  session = { ...soloSession, teaching: session.teaching, difficulty: session.difficulty };
+  onlineRoom = null; onlineJoining = false; onlineError = ''; onlineBusy = false;
+  showNotice('已返回电脑对弈。'); render();
+  if (session.position.turn === 'black' && !session.outcome) void requestComputerMove();
+});
+window.addEventListener('pagehide', () => { cancelTask(); opponent.dispose(); onlineClient.dispose(); });
 window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
 
-drawBoard(); populateRules(); render();
+drawBoard(); populateRules(); initializeFloatingRules(); initializeFeedback(); render();
+visitReady = initializeVisitTracking();
 if (restored.notice) showNotice(restored.notice);
-if (!session.teaching && session.position.turn === 'black' && !session.outcome) void requestComputerMove();
+if (invitedRoomId) void enterOnline(invitedRoomId);
+else {
+  reportComputerGame();
+  if (session.position.turn === 'black' && !session.outcome) void requestComputerMove();
+}

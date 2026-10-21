@@ -1,0 +1,14 @@
+services:
+  xiangqi:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      DATA_DIR: /data
+      TRUST_PROXY: "1"
+    volumes:
+      - xiangqi-data:/data
+
+volumes:
+  xiangqi-data:

@@ -1,0 +1,29 @@
+[Unit]
+Description=Yibu Xiangqi
+After=network.target
+
+[Service]
+Type=simple
+User=xiangqi
+Group=xiangqi
+WorkingDirectory=/opt/xiangqi
+ExecStart=/usr/bin/node /opt/xiangqi/scripts/serve.mjs
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=5173
+Environment=DATA_DIR=/var/lib/xiangqi
+Environment=TRUST_PROXY=1
+StateDirectory=xiangqi
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xiangqi
+
+[Install]
+WantedBy=multi-user.target

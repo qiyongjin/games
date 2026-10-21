@@ -1,27 +1,17 @@
-import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import { dirname, resolve, extname, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createXiangqiServer } from './server.mjs';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const port = Number(process.env.PORT || 5173);
-const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };
-const server = createServer(async (request, response) => {
-  try {
-    const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
-    const file = resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
-    const relative = file.slice(root.length + 1);
-    if (!file.startsWith(root + sep) || relative.split(/[\\/]/).some(part => part.startsWith('.')) || !['GET', 'HEAD'].includes(request.method)) {
-      response.writeHead(403).end('Forbidden');
-      return;
-    }
-    if (!(await stat(file)).isFile()) throw new Error('Not a file');
-    const data = await readFile(file);
-    response.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-    response.end(request.method === 'HEAD' ? undefined : data);
-  } catch {
-    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('文件不存在');
-  }
+const host = process.env.HOST || '127.0.0.1';
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 必须为 1 至 65535。');
+const server = await createXiangqiServer({
+  dataDir: process.env.DATA_DIR,
+  adminPassword: process.env.ADMIN_PASSWORD,
+  trustProxy: process.env.TRUST_PROXY === '1',
+  onError: error => console.error(`服务错误：${error.message}`),
 });
 server.on('error', error => { console.error(`启动失败：${error.message}`); process.exitCode = 1; });
-server.listen(port, '127.0.0.1', () => console.log(`弈步已启动：http://127.0.0.1:${port}\n按 Ctrl+C 停止。`));
+server.listen(port, host, () => console.log(`弈步已启动：http://${host.includes(':') ? `[${host}]` : host}:${port}\n管理后台：/admin\n首次随机密码保存在：${server.credentialsPath}（使用 ADMIN_PASSWORD 时不生成此文件）\n按 Ctrl+C 停止。`));
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
+  server.close(async () => { await server.flush(); process.exit(0); });
+  server.closeIdleConnections();
+});

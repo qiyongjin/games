@@ -13,7 +13,7 @@
 <body>
   <header class="site-header">
     <a class="brand" href="./" aria-label="弈步首页"><span class="brand-mark">弈</span><span class="brand-name">弈步</span><span class="brand-subtitle">象棋入门</span></a>
-    <span class="header-note"><span class="status-dot"></span>你的第一位象棋陪练</span>
+    <nav class="header-actions" aria-label="顶部导航"><span class="header-note"><span class="status-dot"></span>你的第一位象棋陪练</span><button type="button" class="header-button" id="invite-button">邀请好友</button><button type="button" class="header-button" id="feedback-button">优化建议</button></nav>
   </header>
 
   <main class="page-shell">
@@ -25,7 +25,7 @@
     <div id="notice" class="notice" role="status" hidden></div>
     <div class="game-layout">
       <section class="board-section" aria-label="象棋对局">
-        <div class="player-row opponent-row"><div class="player-info"><span class="player-avatar black-avatar">将</span><div><strong>电脑陪练 <span class="small-tag" id="level-tag">入门</span></strong><span class="player-caption">黑方 · 和你一起练习</span></div></div><span id="turn-badge" class="turn-badge">轮到红方</span></div>
+        <div class="player-row opponent-row"><div class="player-info"><span class="player-avatar black-avatar">将</span><div><strong><span id="opponent-name">电脑陪练</span> <span class="small-tag" id="level-tag">入门</span></strong><span class="player-caption" id="opponent-caption">黑方 · 和你一起练习</span></div></div><span id="turn-badge" class="turn-badge">轮到红方</span></div>
         <div class="board-frame">
           <div id="board" class="chessboard" role="grid" aria-label="中国象棋棋盘，黑方在上、红方在下" aria-rowcount="10" aria-colcount="9">
             <svg id="board-art" viewBox="0 0 540 600" aria-hidden="true" class="board-art"></svg>
@@ -33,25 +33,35 @@
             <div id="squares" class="squares"></div>
           </div>
         </div>
-        <div class="player-row human-row"><div class="player-info"><span class="player-avatar red-avatar">帅</span><div><strong>你 <span class="small-tag red-tag">红方</span></strong><span class="player-caption" id="human-caption">红方先走，慢慢来</span></div></div><span class="move-counter" id="move-counter">第 1 回合</span></div>
+        <div class="player-row human-row"><div class="player-info"><span class="player-avatar red-avatar">帅</span><div><strong><span id="human-name">你</span> <span class="small-tag red-tag" id="human-side-tag">红方</span></strong><span class="player-caption" id="human-caption">红方先走，慢慢来</span></div></div><span class="move-counter" id="move-counter">第 1 回合</span></div>
         <div class="board-legend"><span><i class="legend-dot"></i>可以走</span><span><i class="legend-ring"></i>可以吃</span><span><i class="legend-last"></i>上一步</span><span class="board-tip">点选棋子，再点落点</span></div>
       </section>
 
       <aside class="learning-column" aria-label="教学与对局操作">
+        <section class="online-panel" id="online-panel" aria-labelledby="online-title" hidden>
+          <div class="online-heading"><span class="section-label" id="online-title">联机对弈</span><span class="online-badge">好友棋局</span></div>
+          <p id="online-status" class="online-status" role="status" aria-live="polite">正在创建棋局…</p>
+          <p id="online-players" class="online-players">等待好友加入</p>
+          <label class="invite-label" for="invite-link">把邀请链接发给好友</label>
+          <div class="invite-link-row"><input id="invite-link" type="text" readonly autocomplete="off" aria-label="好友邀请链接"><button type="button" id="copy-invite" class="subtle-button">复制</button></div>
+          <button type="button" id="ready-button" class="primary-button">准备开始</button>
+          <button type="button" id="leave-room" class="text-button">返回电脑对弈</button>
+        </section>
+
         <section class="coach-card">
           <div class="card-heading"><span class="section-label"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.5 6.8L21 12l-6.5 3.2L12 22l-2.5-6.8L3 12l6.5-3.2z"/></svg>随局教练</span><label class="switch-label"><span id="teaching-label">教学已开启</span><input id="teaching-toggle" type="checkbox" checked aria-label="开启教学"><span class="switch-track" aria-hidden="true"></span></label></div>
           <div class="coach-content" id="coach-content" aria-live="polite" aria-atomic="true">
             <span class="coach-kicker" id="coach-kicker">第一课 · 认识棋子</span>
             <h2 id="coach-title">每一步，都有门道。</h2>
             <p id="coach-rule" class="coach-rule">点击一枚红棋，看看它的走法。棋盘上的小圆点，就是它可以去的地方。</p>
-            <div id="coach-effect-wrap" class="coach-effect"><span class="effect-label">小提示</span><p id="coach-effect">棋子放在线的交叉点上。你执红先走，电脑会等你读完讲解再应手。</p></div>
+            <div id="coach-effect-wrap" class="coach-effect"><span class="effect-label">小提示</span><p id="coach-effect">棋子放在线的交叉点上。你执红先走，落子后电脑会自动应手。</p></div>
             <details id="coach-detail" class="coach-detail" hidden><summary>再多了解一点 <span>＋</span></summary><p id="coach-detail-text"></p></details>
           </div>
           <div class="coach-footer"><span class="tiny-sparkle">✧</span><span id="coach-footer-text">先懂规则，再慢慢发现下棋的乐趣。</span></div>
         </section>
 
         <section class="controls-card" aria-label="对局控制">
-          <div class="control-top"><span class="section-label">人机对弈</span><label class="difficulty-label" for="difficulty">难度 <select id="difficulty"><option value="beginner">入门陪练</option><option value="normal">普通对手</option></select></label></div>
+          <div class="control-top"><span class="section-label" id="game-mode-label">人机对弈</span><label class="difficulty-label" for="difficulty">难度 <select id="difficulty"><option value="beginner">入门陪练</option><option value="normal">普通对手</option></select></label></div>
           <div class="game-status"><span id="status-indicator" class="status-dot"></span><div><strong id="status-title">轮到你落子</strong><p id="status-description">选一枚红棋，探索它能走到哪里。</p></div></div>
           <button class="primary-button" id="primary-action"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M8.5 14.5C6 12.5 6 8 8.5 6a5.4 5.4 0 017 0c2.5 2 2.5 6.5 0 8.5L15 16H9z"/></svg><span id="primary-label">给我一点提示</span><span class="button-arrow" aria-hidden="true">↗</span></button>
           <div class="secondary-actions"><button id="undo-button" disabled><span aria-hidden="true">↶</span> 悔棋</button><button id="restart-button"><span aria-hidden="true">↻</span> 重新开始</button></div>
@@ -59,13 +69,34 @@
         </section>
 
         <details class="utility-card" id="history-panel"><summary><span><span class="utility-icon" aria-hidden="true">☷</span>走棋记录</span><span class="summary-right"><span id="history-count">0 步</span><span class="chevron">⌄</span></span></summary><ol id="history-list" class="history-list"><li class="empty-history">第一步，正等着你落下。</li></ol></details>
-        <details class="utility-card" id="rules-panel"><summary><span><span class="utility-icon" aria-hidden="true">◫</span>规则速查</span><span class="summary-right">随时翻看 <span class="chevron">⌄</span></span></summary><div id="rules-list" class="rules-list"></div></details>
       </aside>
     </div>
-    <footer class="site-footer"><span class="footer-brand">弈步 <span>·</span> 一步一懂，一局一得</span><span>进度自动保存在此浏览器</span></footer>
+    <footer class="site-footer"><span class="footer-brand">弈步 <span>·</span> 一步一懂，一局一得</span><span>进度自动保存在此浏览器</span><span class="privacy-note">本站记录访问 IP 与对局统计，仅管理员可查看。</span></footer>
   </main>
 
+  <section class="utility-card floating-rules" id="rules-panel" aria-labelledby="rules-title">
+    <div class="rules-header">
+      <h2 class="rules-heading"><button type="button" class="rules-drag" id="rules-drag" aria-describedby="rules-move-help" title="拖动标题移动，或使用方向键移动"><span class="utility-icon" aria-hidden="true">⠿</span><span id="rules-title">规则速查</span><span class="rules-drag-hint" aria-hidden="true">可拖动</span></button></h2>
+      <button type="button" class="rules-toggle" id="rules-toggle" aria-expanded="false" aria-controls="rules-list"><span id="rules-toggle-label">展开</span><span class="chevron" aria-hidden="true">⌄</span></button>
+    </div>
+    <p class="visually-hidden" id="rules-move-help">拖动标题可移动窗口。也可聚焦标题后使用方向键移动，按住 Shift 加快移动。</p>
+    <div id="rules-list" class="rules-list" tabindex="0" aria-label="象棋行棋规则" hidden></div>
+  </section>
+
   <dialog id="restart-dialog" aria-labelledby="restart-title" aria-describedby="restart-description"><form method="dialog"><span class="dialog-icon">弈</span><h2 id="restart-title">重新摆好棋，来一局？</h2><p id="restart-description">当前对局会结束，教学设置和难度会保留。</p><div class="dialog-actions"><button value="cancel" autofocus>继续这局</button><button value="restart" class="dialog-confirm">重新开始</button></div></form></dialog>
+  <dialog id="feedback-dialog" class="feedback-dialog" aria-labelledby="feedback-title" aria-describedby="feedback-description">
+    <form id="feedback-form">
+      <span class="dialog-icon" aria-hidden="true">弈</span><h2 id="feedback-title">一起，让弈步更好。</h2>
+      <p id="feedback-description">遇到问题，或有想要的新功能，都可以告诉我们。</p>
+      <label class="form-label" for="feedback-message">你的建议 <span>必填</span></label>
+      <textarea id="feedback-message" name="message" rows="5" minlength="5" maxlength="2000" required placeholder="请写下遇到的问题或改进建议（5–2000 字）" aria-describedby="feedback-count feedback-status"></textarea>
+      <div class="feedback-count" id="feedback-count">0 / 2000</div>
+      <label class="form-label" for="feedback-contact">联系方式 <span>选填</span></label>
+      <input id="feedback-contact" name="contact" type="text" maxlength="200" autocomplete="email" placeholder="邮箱或其他联系方式（最多 200 字）">
+      <p id="feedback-status" class="feedback-status" role="status" aria-live="polite"></p>
+      <div class="dialog-actions"><button type="button" id="feedback-close">先关闭</button><button type="submit" id="feedback-submit" class="dialog-confirm">提交建议</button></div>
+    </form>
+  </dialog>
   <noscript><p class="notice">请开启浏览器的 JavaScript，以开始象棋对弈。</p></noscript>
 </body>
 </html>

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#294b3c">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="same-origin">
+  <title>弈步 · 私有管理后台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%23294b3c'/%3E%3Ctext x='24' y='34' text-anchor='middle' font-size='32' fill='%23f6eddb'%3E弈%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="admin.css">
+  <script type="module" src="src/admin.js"></script>
+</head>
+<body>
+  <header class="admin-header">
+    <a class="brand" href="./" aria-label="返回弈步棋局"><span class="brand-mark">弈</span><span class="brand-name">弈步</span><span class="brand-subtitle">私有后台</span></a>
+    <nav aria-label="后台导航"><a class="quiet-link" href="./">返回棋局 <span aria-hidden="true">↗</span></a><button id="logout-button" class="plain-button" hidden>退出登录</button></nav>
+  </header>
+
+  <main class="admin-shell">
+    <section class="page-intro" aria-labelledby="page-title">
+      <div><p class="eyebrow">弈步 · 访问与对局</p><h1 id="page-title">每一局，<em>都有迹可循。</em></h1><p class="intro-copy">查看站点访问、对局记录与玩家留下的建议。</p></div>
+      <span class="private-badge"><span aria-hidden="true">●</span> 仅管理员可访问</span>
+    </section>
+
+    <p id="page-status" class="message" role="status" aria-live="polite">正在检查登录状态…</p>
+
+    <section id="login-panel" class="login-card card" aria-labelledby="login-title" hidden>
+      <span class="login-mark" aria-hidden="true">弈</span>
+      <p class="eyebrow">管理员验证</p>
+      <h2 id="login-title">欢迎回来。</h2>
+      <p class="section-description">输入管理员密码，查看私有统计。</p>
+      <form id="login-form">
+        <label for="admin-password">管理员密码</label>
+        <input id="admin-password" name="password" type="password" autocomplete="current-password" required maxlength="256" placeholder="输入管理员密码">
+        <button id="login-button" class="primary-button" type="submit">进入后台 <span aria-hidden="true">→</span></button>
+      </form>
+      <p class="login-help">管理员密码由服务器首次启动时生成，首次密码保存在服务器 DATA_DIR 下的 admin-credentials.txt；也可使用部署时配置的管理员密码。</p>
+    </section>
+
+    <div id="dashboard" hidden>
+      <div class="dashboard-toolbar"><p id="updated-at">正在读取统计…</p><button id="refresh-button" class="plain-button">刷新统计 <span aria-hidden="true">↻</span></button></div>
+
+      <section class="metrics" aria-label="站点统计概览">
+        <article class="metric card"><p>总访问次数</p><strong id="metric-visits">—</strong><span>累计访问会话</span></article>
+        <article class="metric card"><p>累计访客</p><strong id="metric-visitors">—</strong><span>按浏览器访客标识统计</span></article>
+        <article class="metric card"><p>玩过的人数</p><strong id="metric-players">—</strong><span>参与过对局的访客</span></article>
+        <article class="metric card"><p>完局人数</p><strong id="metric-completedPlayers">—</strong><span>完成过对局的访客</span></article>
+        <article class="metric card"><p>已开始对局</p><strong id="metric-startedGames">—</strong><span>人机与好友对局</span></article>
+        <article class="metric card"><p>已完成对局</p><strong id="metric-completedGames">—</strong><span>有明确结束结果的棋局</span></article>
+        <article class="metric card"><p>当前在线访客</p><strong id="metric-onlineVisitors">—</strong><span>近期仍连接本站的访客</span></article>
+      </section>
+
+      <section class="card data-section" aria-labelledby="visitors-title">
+        <div class="section-heading"><div><p class="eyebrow">谁来过棋馆</p><h2 id="visitors-title">访客与 IP 记录</h2><p class="section-description">访客标识用于区分浏览器。同一人使用不同设备或清除浏览器数据，可能被计为不同访客。</p></div><label class="search-field" for="visitor-search"><span>筛选访客</span><input type="search" id="visitor-search" placeholder="搜索 IP 或访客标识" autocomplete="off"></label></div>
+        <section class="ip-panel" id="ip-panel" aria-labelledby="ip-title" hidden><div class="ip-heading"><h3 id="ip-title">IP 网络信息</h3><button id="ip-close" class="plain-button" type="button">关闭</button></div><p id="ip-status" role="status" aria-live="polite"></p><dl id="ip-details"></dl><p class="privacy-note">网络范围与反向域名仅供排查来源，不能用于确认真实个人身份或精确位置。</p></section>
+        <div class="table-scroll" role="region" tabindex="0" aria-label="访客记录表，可左右滚动"><table class="visitors-table"><thead><tr><th scope="col">IP / 访客标识</th><th scope="col">访问次数</th><th scope="col">开局 / 完局</th><th scope="col">首次访问</th><th scope="col">最近访问</th><th scope="col">浏览器信息</th><th scope="col">来源排查</th></tr></thead><tbody id="visitors-body"></tbody></table></div>
+        <p id="visitor-count" class="table-footnote">暂无访客记录</p>
+      </section>
+
+      <section class="card data-section" aria-labelledby="games-title">
+        <div class="section-heading"><div><p class="eyebrow">棋局档案</p><h2 id="games-title">对局记录</h2><p class="section-description">人机与好友对局的开始、结束状态及参与 IP。</p></div><span id="game-count" class="count-badge">0 局</span></div>
+        <div class="table-scroll" role="region" tabindex="0" aria-label="对局记录表，可左右滚动"><table class="games-table"><thead><tr><th scope="col">棋局标识</th><th scope="col">模式</th><th scope="col">状态</th><th scope="col">开始时间</th><th scope="col">结束时间</th><th scope="col">参与访客 / IP</th></tr></thead><tbody id="games-body"></tbody></table></div>
+      </section>
+
+      <section class="card data-section" aria-labelledby="feedback-title">
+        <div class="section-heading"><div><p class="eyebrow">一起把弈步变得更好</p><h2 id="feedback-title">优化建议</h2><p class="section-description">玩家通过顶部「优化建议」入口提交的反馈。</p></div><span id="feedback-count" class="count-badge">0 条</span></div>
+        <div id="feedback-list" class="feedback-list"></div>
+      </section>
+      <p class="dashboard-note" id="retention-note">数据保留 90 天。统计仅向已登录管理员提供。IP 可能对应共享网络、代理或服务器出口；人数以本站访客标识估算。</p>
+    </div>
+    <footer class="admin-footer"><span>弈步 · 一步一懂，一局一得</span><span>私有管理空间</span></footer>
+  </main>
+  <noscript><p class="message error">请开启浏览器 JavaScript，以使用管理员登录和统计后台。</p></noscript>
+</body>
+</html>

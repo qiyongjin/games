@@ -1,0 +1,12 @@
+.git
+.data
+dist
+node_modules
+tests
+coverage
+.cache
+*.log
+.env*
+README.md
+!deploy/README.md
+xiangqi-deploy.tar.gz*
