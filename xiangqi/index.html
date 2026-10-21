@@ -80,6 +80,13 @@
   </section>
 
   <dialog id="restart-dialog" aria-labelledby="restart-title" aria-describedby="restart-description"><form method="dialog"><span class="dialog-icon">弈</span><h2 id="restart-title">重新摆好棋，来一局？</h2><p id="restart-description">当前对局会结束，教学设置和难度会保留。</p><div class="dialog-actions"><button value="cancel" autofocus>继续这局</button><button value="restart" class="dialog-confirm">重新开始</button></div></form></dialog>
+  <dialog id="room-entry-dialog" aria-labelledby="room-entry-title" aria-describedby="room-entry-description">
+    <form method="dialog">
+      <span class="dialog-icon" aria-hidden="true">弈</span><h2 id="room-entry-title">这局已有其他玩家对弈</h2>
+      <p id="room-entry-description">这个邀请已有其他玩家加入，请重新邀请好友，开始一局新的对弈。</p>
+      <div class="dialog-actions"><button value="cancel">先返回</button><button value="invite" class="dialog-confirm" autofocus>重新邀请好友</button></div>
+    </form>
+  </dialog>
   <dialog id="feedback-dialog" class="feedback-dialog" aria-labelledby="feedback-title" aria-describedby="feedback-description">
     <form id="feedback-form">
       <span class="dialog-icon" aria-hidden="true">弈</span><h2 id="feedback-title">一起，让弈步更好。</h2>

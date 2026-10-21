@@ -224,7 +224,11 @@ test('two distinct seats must join and confirm online, with no seat token disclo
   const id = created.data.room.id;
   const redHeaders = { Authorization: `Bearer ${created.data.token}` };
   assert.equal(created.data.room.you, 'red');
-  assert.equal((await red.post(`/api/rooms/${id}/join`)).status, 409);
+  const returned = await red.post(`/api/rooms/${id}/join`);
+  assert.equal(returned.status, 200);
+  assert.equal(returned.data.room.you, 'red');
+  assert.equal(returned.data.token, created.data.token);
+  assert.equal(returned.data.room.players.black.joined, false);
   const solo = await red.post(`/api/rooms/${id}/ready`, { ready: true }, redHeaders);
   assert.equal(solo.data.room.phase, 'waiting');
   assert.equal((await red.post(`/api/rooms/${id}/move`, { from: 54, to: 45, version: solo.data.room.version }, redHeaders)).status, 409);
@@ -233,13 +237,90 @@ test('two distinct seats must join and confirm online, with no seat token disclo
   assert.equal(joined.data.room.you, 'black');
   assert.notEqual(created.data.token, joined.data.token);
   assert.equal(JSON.stringify(joined.data.room).includes(created.data.token), false);
+  const returnedBlack = await black.post(`/api/rooms/${id}/join`);
+  assert.equal(returnedBlack.status, 200);
+  assert.equal(returnedBlack.data.token, joined.data.token);
+  assert.deepEqual(returnedBlack.data.room, joined.data.room);
   const outsider = f.client();
-  assert.equal((await outsider.post(`/api/rooms/${id}/join`)).status, 409);
+  const occupied = await outsider.post(`/api/rooms/${id}/join`);
+  assert.equal(occupied.status, 409);
+  assert.equal(occupied.data.code, 'room_occupied');
+  assert.deepEqual(Object.keys(occupied.data).sort(), ['code', 'error']);
   assert.equal((await outsider.post(`/api/rooms/${id}/sync`)).status, 401);
   assert.equal((await outsider.post(`/api/rooms/${id}/sync`, {}, { Authorization: `Bearer ${'a'.repeat(43)}` })).status, 403);
   const ready = await black.post(`/api/rooms/${id}/ready`, { ready: true }, { Authorization: `Bearer ${joined.data.token}` });
   assert.equal(ready.data.room.phase, 'playing');
   assert.equal(ready.data.room.outcome, null);
+});
+
+test('original browser identities reopen their own seats and preserve an active game in a new tab', async t => {
+  const f = await fixture(t);
+  const r = await startedRoom(f);
+  const moved = await r.red.post(`/api/rooms/${r.id}/move`, { from: 54, to: 45, version: r.room.version }, r.redHeaders);
+  assert.equal(moved.status, 200);
+  const before = moved.data.room;
+  for (const [side, original, credential] of [['red', r.red, r.created], ['black', r.black, r.joined]]) {
+    const reopened = f.client();
+    reopened.cookies.set('yibu_visitor', original.cookies.get('yibu_visitor'));
+    const restored = await reopened.post(`/api/rooms/${r.id}/join`);
+    assert.equal(restored.status, 200);
+    assert.equal(restored.data.room.you, side);
+    assert.equal(restored.data.token, credential.data.token);
+    assert.equal(restored.data.room.phase, 'playing');
+    assert.equal(restored.data.room.version, before.version);
+    assert.deepEqual(restored.data.room.moves, before.moves);
+    assert.deepEqual(restored.data.room.players, before.players);
+    assert.equal(JSON.stringify(restored.data.room).includes(r.created.data.token), false);
+    assert.equal(JSON.stringify(restored.data.room).includes(r.joined.data.token), false);
+    assert.equal(JSON.stringify(restored.data).includes(original.cookies.get('yibu_visitor')), false);
+    const originalHeaders = side === 'red' ? r.redHeaders : r.blackHeaders;
+    assert.equal((await original.post(`/api/rooms/${r.id}/sync`, {}, originalHeaders)).status, 200);
+  }
+  const blackTurn = await r.black.post(`/api/rooms/${r.id}/move`, { from: 27, to: 36, version: before.version }, r.blackHeaders);
+  assert.equal(blackTurn.status, 200);
+  assert.deepEqual(blackTurn.data.room.moves, [{ from: 54, to: 45 }, { from: 27, to: 36 }]);
+  await f.login();
+  const stats = (await f.admin.request('/api/admin/stats')).data;
+  assert.equal(stats.summary.startedGames, 1);
+  assert.equal(stats.summary.completedGames, 0);
+  assert.equal(stats.summary.visitors, 2);
+  assert.equal(stats.visitors.every(visitor => visitor.startedGames === 1), true);
+});
+
+test('a valid original bearer recovers its own visitor cookie without changing either seat', async t => {
+  const f = await fixture(t);
+  const r = await startedRoom(f);
+  const recoveredBrowser = f.client();
+  const restored = await recoveredBrowser.post(`/api/rooms/${r.id}/join`, {}, r.blackHeaders);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.data.room.you, 'black');
+  assert.equal(restored.data.token, r.joined.data.token);
+  assert.equal(recoveredBrowser.cookies.get('yibu_visitor'), r.black.cookies.get('yibu_visitor'));
+  assert.equal((await recoveredBrowser.post(`/api/rooms/${r.id}/join`)).data.room.you, 'black');
+  assert.equal((await r.red.post(`/api/rooms/${r.id}/sync`, {}, r.redHeaders)).data.room.you, 'red');
+  assert.equal((await r.black.post(`/api/rooms/${r.id}/sync`, {}, r.blackHeaders)).data.room.you, 'black');
+});
+
+test('occupied seats stay reserved while offline and untrusted request IDs cannot restore them', async t => {
+  let timestamp = Date.now();
+  const f = await fixture(t, { now: () => timestamp, onlineMs: 1_000 });
+  const r = await startedRoom(f);
+  timestamp += 1_001;
+  const outsider = f.client();
+  const attempted = await outsider.post(`/api/rooms/${r.id}/join`, { visitorId: r.black.cookies.get('yibu_visitor'), you: 'black', token: r.joined.data.token });
+  assert.equal(attempted.status, 409);
+  assert.equal(attempted.data.code, 'room_occupied');
+  assert.deepEqual(Object.keys(attempted.data).sort(), ['code', 'error']);
+  assert.equal(JSON.stringify(attempted.data).includes(r.created.data.token), false);
+  assert.equal(JSON.stringify(attempted.data).includes(r.joined.data.token), false);
+  const resumed = await r.black.post(`/api/rooms/${r.id}/join`);
+  assert.equal(resumed.status, 200);
+  assert.equal(resumed.data.room.you, 'black');
+  assert.equal(resumed.data.room.players.red.online, false);
+  assert.equal(resumed.data.room.players.black.online, true);
+  assert.equal(resumed.data.room.players.red.ready, true);
+  assert.equal(resumed.data.room.players.black.ready, true);
+  assert.equal(resumed.data.room.version, r.room.version);
 });
 
 test('authoritative rooms reject out-of-turn, illegal, stale and concurrent duplicate moves', async t => {
@@ -286,6 +367,9 @@ test('online terminal results are verified and counted once for both players', a
   }
   assert.equal(room.phase, 'finished');
   assert.equal(room.outcome.reason, 'repetition');
+  const finishedJoin = await r.red.post(`/api/rooms/${r.id}/join`);
+  assert.equal(finishedJoin.status, 409);
+  assert.equal(finishedJoin.data.code, 'room_unavailable');
   assert.equal((await r.red.post(`/api/rooms/${r.id}/move`, { from: 54, to: 45, version: room.version }, r.redHeaders)).status, 409);
   await r.red.post(`/api/rooms/${r.id}/sync`, {}, r.redHeaders);
   await f.login();
@@ -307,6 +391,12 @@ test('leaving resigns an active game and revokes the leaving seat', async t => {
   assert.equal(leave.data.room.outcome.winner, 'red');
   assert.equal(leave.data.room.outcome.reason, 'resign');
   assert.equal((await r.black.post(`/api/rooms/${r.id}/sync`, {}, r.blackHeaders)).status, 403);
+  for (const player of [r.red, r.black, f.client()]) {
+    const retry = await player.post(`/api/rooms/${r.id}/join`);
+    assert.equal(retry.status, 409);
+    assert.equal(retry.data.code, 'room_unavailable');
+    assert.equal(retry.data.token, undefined);
+  }
   await f.login();
   assert.equal((await f.admin.request('/api/admin/stats')).data.summary.completedGames, 1);
 });
@@ -318,6 +408,9 @@ test('room expiration and capacity are bounded and do not count abandoned games 
   assert.equal((await f.client().post('/api/rooms')).status, 503);
   timestamp += 1_001;
   assert.equal((await r.red.post(`/api/rooms/${r.id}/sync`, {}, r.redHeaders)).status, 404);
+  const expiredJoin = await r.black.post(`/api/rooms/${r.id}/join`);
+  assert.equal(expiredJoin.status, 404);
+  assert.equal(expiredJoin.data.code, 'room_unavailable');
   assert.equal((await f.client().post('/api/rooms')).status, 201);
   await f.login();
   const stats = (await f.admin.request('/api/admin/stats')).data;

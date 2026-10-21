@@ -89,6 +89,12 @@ async function enterOnline(id = null) {
   catch (error) {
     await onlineClient.leave(); onlineJoining = false;
     showNotice(error.message || '暂时无法创建棋局，请稍后重试。', true);
+    if (id && ['room_occupied', 'room_unavailable'].includes(error.code)) {
+      $('room-entry-title').textContent = error.code === 'room_occupied' ? '这局已有其他玩家对弈' : '这局无法继续';
+      $('room-entry-description').textContent = error.message || '请重新邀请好友，开始一局新的对弈。';
+      $('room-entry-dialog').returnValue = 'cancel';
+      $('room-entry-dialog').showModal();
+    }
   } finally {
     onlineBusy = false; render();
   }
@@ -379,7 +385,7 @@ function renderControls() {
   $('difficulty').disabled = isOnline();
   $('sound-toggle').textContent = `落子音效：${moveSound.enabled ? '开' : '关'}`;
   $('sound-toggle').setAttribute('aria-pressed', String(moveSound.enabled));
-  $('sound-toggle').title = moveSound.enabled ? '关闭落子音效' : '开启落子音效';
+  $('sound-toggle').title = moveSound.enabled ? '关闭落子音效，重新开启可试听' : '开启并试听落子音效';
   if (isOnline()) renderOnlineControls();
 }
 
@@ -564,17 +570,20 @@ $('undo-button').addEventListener('click', () => {
 });
 $('restart-button').addEventListener('click', askRestart);
 $('restart-dialog').addEventListener('close', () => { if ($('restart-dialog').returnValue === 'restart') restart(); });
+$('room-entry-dialog').addEventListener('close', () => {
+  if ($('room-entry-dialog').returnValue === 'invite') void enterOnline();
+});
 $('teaching-toggle').addEventListener('change', event => {
   session = { ...session, teaching: event.target.checked }; coachView = null; related = []; persist(); render();
 });
 $('difficulty').addEventListener('change', event => { session = { ...session, difficulty: event.target.value }; persist(); renderControls(); });
 $('sound-toggle').addEventListener('click', () => {
   moveSound.setEnabled(!moveSound.enabled);
-  if (moveSound.enabled) void moveSound.unlock();
+  if (moveSound.enabled) void moveSound.unlock({ preview: true });
   try { localStorage.setItem('xiangqi-move-sound:v1', moveSound.enabled ? 'on' : 'off'); } catch { /* The preference is optional. */ }
   renderControls();
 });
-for (const eventName of ['pointerdown', 'keydown', 'click']) document.addEventListener(eventName, event => {
+for (const eventName of ['pointerdown', 'pointerup', 'touchend', 'keydown', 'click']) document.addEventListener(eventName, event => {
   if (event.isTrusted) void moveSound.unlock();
 }, { capture: true });
 $('invite-button').addEventListener('click', () => void enterOnline());

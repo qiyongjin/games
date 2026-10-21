@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash } from 'node:crypto';
+import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash, createHmac } from 'node:crypto';
 import { reverse } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { dirname, resolve, extname, sep, join } from 'node:path';
@@ -20,9 +20,9 @@ const safeId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{8,100}$/.te
 const publicTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
 
 class RequestError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, code) { super(message); this.status = status; this.code = code; }
 }
-const fail = (status, message) => { throw new RequestError(status, message); };
+const fail = (status, message, code) => { throw new RequestError(status, message, code); };
 function normalizeIP(value) {
   let ip = String(value || '').trim();
   if (ip.startsWith('::ffff:') && isIP(ip.slice(7)) === 4) ip = ip.slice(7);
@@ -119,6 +119,11 @@ export async function createXiangqiServer(options = {}) {
   const sessions = new Map();
   const limits = new Map();
   const rooms = new Map();
+  // Live rooms share the server lifetime. Derivation lets an authenticated browser
+  // recover its original bearer without storing raw seat credentials or rotating
+  // credentials that are still in use by another tab.
+  const roomTokenKey = randomBytes(32);
+  const seatToken = (room, side, visitorId) => createHmac('sha256', roomTokenKey).update(JSON.stringify([room.id, side, visitorId])).digest('base64url');
   let roomQueue = Promise.resolve();
   const serializeRooms = work => {
     const task = roomQueue.then(work);
@@ -169,10 +174,15 @@ export async function createXiangqiServer(options = {}) {
     state.games = state.games.filter(game => Date.parse(game.startedAt) >= cutoff).slice(-20_000);
     state.feedback = state.feedback.filter(item => Date.parse(item.createdAt) >= cutoff).slice(-2_000);
   }
-  async function visitorFor(request, response, { visit = false } = {}) {
+  function knownVisitor(request) {
     const supplied = cookieValues(request)[COOKIE_VISITOR];
-    const existing = safeId(supplied) && storage.value.visitors.find(visitor => visitor.id === supplied);
-    const id = existing ? supplied : token();
+    return safeId(supplied) ? storage.value.visitors.find(visitor => visitor.id === supplied) : undefined;
+  }
+  async function visitorFor(request, response, { visit = false, trustedVisitorId } = {}) {
+    // trustedVisitorId is only supplied after authenticating an existing seat
+    // through its bearer or its known persistent visitor cookie.
+    const existing = trustedVisitorId ? storage.value.visitors.find(visitor => visitor.id === trustedVisitorId) : knownVisitor(request);
+    const id = existing ? existing.id : token();
     const ip = clientIP(request);
     const timestamp = new Date(now()).toISOString();
     await storage.update(state => {
@@ -186,7 +196,7 @@ export async function createXiangqiServer(options = {}) {
       if (visit) visitor.visits += 1;
       prune(state);
     });
-    if (!existing) setCookie(request, response, COOKIE_VISITOR, id, retentionDays * 86_400);
+    if (cookieValues(request)[COOKIE_VISITOR] !== id) setCookie(request, response, COOKIE_VISITOR, id, retentionDays * 86_400);
     return { id, ip };
   }
   function roomView(room, side) {
@@ -194,11 +204,18 @@ export async function createXiangqiServer(options = {}) {
     const player = seat => ({ joined: Boolean(seat && !seat.left), online: online(seat), ready: Boolean(seat && !seat.left && seat.ready) });
     return { id: room.id, phase: room.phase, you: side, players: { red: player(room.red), black: player(room.black) }, moves: room.moves, outcome: room.session.outcome || room.outcome || null, version: room.version };
   }
+  function authenticatedRoomSeat(request, room) {
+    const header = request.headers.authorization || '';
+    if (!/^Bearer [A-Za-z0-9_-]{43}$/.test(header)) return null;
+    const hash = digest(header.slice(7));
+    for (const side of ['red', 'black']) if (room[side]?.hash === hash && !room[side].left) return side;
+    return null;
+  }
   function roomSeat(request, room) {
     const header = request.headers.authorization || '';
     if (!/^Bearer [A-Za-z0-9_-]{43}$/.test(header)) fail(401, '棋局凭据无效，请重新打开邀请链接。');
-    const hash = digest(header.slice(7));
-    for (const side of ['red', 'black']) if (room[side]?.hash === hash && !room[side].left) return side;
+    const side = authenticatedRoomSeat(request, room);
+    if (side) return side;
     fail(403, '你没有此棋局的操作权限。');
   }
   async function maybeStartRoom(room) {
@@ -361,20 +378,29 @@ export async function createXiangqiServer(options = {}) {
           if (rooms.size >= (options.maxRooms || 500)) fail(503, '当前棋局较多，请稍后再试。');
           const visitor = await visitorFor(request, response);
           const id = randomBytes(18).toString('base64url');
-          const secret = token();
+          const secret = seatToken({ id }, 'red', visitor.id);
           const room = { id, phase: 'waiting', red: { hash: digest(secret), visitorId: visitor.id, ip, lastSeen: now(), ready: false }, black: null, session: createSession(), moves: [], version: 0, createdAt: now(), lastActivity: now() };
           rooms.set(id, room);
           return sendJSON(response, 201, { room: roomView(room, 'red'), token: secret });
         }
         const [, , , id, action] = pathname.split('/');
         const room = rooms.get(id);
-        if (!room) fail(404, '棋局不存在或已过期，请重新创建邀请。');
+        if (!room) fail(404, '棋局不存在或已过期，请重新创建邀请。', 'room_unavailable');
         if (action === 'join') {
           rateLimit(`join-room:${ip}`, 60, 60_000);
-          if (room.phase !== 'waiting' || room.black) fail(409, '此棋局已满员或已结束。');
+          if (room.phase === 'finished') fail(409, '此棋局已结束，请重新创建邀请。', 'room_unavailable');
+          const visitorId = knownVisitor(request)?.id;
+          const returningSide = authenticatedRoomSeat(request, room) || ['red', 'black'].find(side => visitorId && room[side]?.visitorId === visitorId && !room[side].left);
+          if (returningSide) {
+            const seat = room[returningSide];
+            await visitorFor(request, response, { trustedVisitorId: seat.visitorId });
+            seat.lastSeen = now(); seat.ip = ip; room.lastActivity = now();
+            await maybeStartRoom(room);
+            return sendJSON(response, 200, { room: roomView(room, returningSide), token: seatToken(room, returningSide, seat.visitorId) });
+          }
+          if (room.phase !== 'waiting' || room.black) fail(409, '已经有用户在对弈了，请重新邀请好友进行对弈。', 'room_occupied');
           const visitor = await visitorFor(request, response);
-          if (visitor.id === room.red.visitorId) fail(409, '你已执红，请用另一位朋友的浏览器打开邀请链接。');
-          const secret = token();
+          const secret = seatToken(room, 'black', visitor.id);
           room.black = { hash: digest(secret), visitorId: visitor.id, ip, lastSeen: now(), ready: false };
           room.version += 1; room.lastActivity = now();
           return sendJSON(response, 200, { room: roomView(room, 'black'), token: secret });
@@ -427,7 +453,7 @@ export async function createXiangqiServer(options = {}) {
   await storage.update(state => { for (const game of state.games) if (game.mode === 'online' && game.status === 'playing') game.status = 'abandoned'; prune(state); });
   const server = createServer((request, response) => {
     handle(request, response).catch(error => {
-      if (!response.headersSent) sendJSON(response, error.status || 500, { error: error.status ? error.message : '服务暂时不可用，请稍后再试。' });
+      if (!response.headersSent) sendJSON(response, error.status || 500, { error: error.status ? error.message : '服务暂时不可用，请稍后再试。', ...(error.status && error.code ? { code: error.code } : {}) });
       else response.destroy();
       if (!error.status && options.onError) options.onError(error);
     });

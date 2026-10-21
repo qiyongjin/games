@@ -4,7 +4,7 @@ export function createMoveSound({ audioContextFactory = defaultAudioContextFacto
   let enabled = true;
   let context = null;
   let buffer = null;
-  let unlocking = null;
+  let primed = false;
   const activeSounds = new Set();
 
   function disconnect(source, volume) {
@@ -12,42 +12,65 @@ export function createMoveSound({ audioContextFactory = defaultAudioContextFacto
     try { volume?.disconnect(); } catch { /* Audio is optional. */ }
   }
 
-  async function unlock() {
+  async function unlock({ preview = false } = {}) {
     if (!enabled) return false;
+    let previewSound = null;
     try {
       if (!context || context.state === 'closed') {
         context = audioContextFactory();
         buffer = null;
+        primed = false;
       }
       if (!context) return false;
-      if (context.state === 'running') return true;
-      if (unlocking) return await unlocking;
       const current = context;
-      const pending = Promise.resolve(current.resume()).then(
-        () => current === context && current.state === 'running',
-        () => false,
-      );
-      unlocking = pending;
-      try {
-        return await pending;
-      } finally {
-        if (unlocking === pending) unlocking = null;
+      if (!primed || current.state !== 'running') {
+        // Start within the gesture itself, before any await. Some Safari versions
+        // need an actual source to initialize output, even after resume(). This
+        // zero-filled frame is silent and never replays a previously missed move.
+        try {
+          primed = !!startBuffer(current.createBuffer(1, 1, current.sampleRate), 0);
+        } catch { /* A failed warm-up must not prevent resume(). */ }
       }
+      // An explicit sound-on click can preview the real sound. Schedule it in
+      // the same gesture too: WKWebView may require playback, not just resume.
+      // Only this intentional preview may be scheduled before audio is running.
+      previewSound = preview ? startWoodenClick() : null;
+      if (current.state === 'running') return !preview || !!previewSound;
+      // Do not reuse an earlier pending resume: touch/pointerdown may precede
+      // iOS user activation and stay pending. A later touchend/click must retry
+      // resume synchronously while that new gesture is still active.
+      await current.resume();
+      const unlocked = enabled && current === context && current.state === 'running' && (!preview || !!previewSound);
+      if (!unlocked) stopSound(previewSound);
+      return unlocked;
     } catch {
+      stopSound(previewSound);
       return false;
     }
   }
 
   function play() {
     if (!enabled || !context || context.state !== 'running') return false;
+    return !!startWoodenClick();
+  }
+
+  function startWoodenClick() {
+    try {
+      buffer ??= createWoodenClick(context);
+      return startBuffer(buffer, 0.5);
+    } catch {
+      return null;
+    }
+  }
+
+  function startBuffer(audioBuffer, gain) {
     let source;
     let volume;
     try {
-      buffer ??= createWoodenClick(context);
       source = context.createBufferSource();
       volume = context.createGain();
-      source.buffer = buffer;
-      volume.gain.value = 0.5;
+      source.buffer = audioBuffer;
+      volume.gain.value = gain;
       source.connect(volume);
       volume.connect(context.destination);
       const active = { source, volume };
@@ -57,26 +80,33 @@ export function createMoveSound({ audioContextFactory = defaultAudioContextFacto
         disconnect(source, volume);
       };
       source.start();
-      return true;
+      return active;
     } catch {
       for (const active of activeSounds) {
         if (active.source === source) activeSounds.delete(active);
       }
       disconnect(source, volume);
-      return false;
+      return null;
     }
+  }
+
+  function stopSound(active) {
+    if (!active) return;
+    activeSounds.delete(active);
+    try { active.source.stop(); } catch { /* It may have already ended. */ }
+    disconnect(active.source, active.volume);
+  }
+
+  function stopActiveSounds() {
+    for (const active of activeSounds) stopSound(active);
   }
 
   async function dispose() {
     const current = context;
     context = null;
     buffer = null;
-    unlocking = null;
-    for (const { source, volume } of activeSounds) {
-      try { source.stop(); } catch { /* It may have already ended. */ }
-      disconnect(source, volume);
-    }
-    activeSounds.clear();
+    primed = false;
+    stopActiveSounds();
     try {
       if (current && current.state !== 'closed') await current.close();
     } catch { /* Audio cleanup must not interfere with navigation. */ }
@@ -86,7 +116,10 @@ export function createMoveSound({ audioContextFactory = defaultAudioContextFacto
     unlock,
     play,
     dispose,
-    setEnabled(value) { enabled = !!value; },
+    setEnabled(value) {
+      enabled = !!value;
+      if (!enabled) stopActiveSounds();
+    },
     get enabled() { return enabled; },
   };
 }
