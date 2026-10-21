@@ -332,7 +332,6 @@ function renderControls() {
     avatar.textContent = side === 'red' ? '帅' : '将';
     avatar.className = `player-avatar ${side}-avatar`;
   }
-  document.querySelector('.intro-copy').textContent = isOnline() ? `邀请好友，双方准备后开始。你执${sideName(playerSide())}，红方先行。` : '不急着赢，先学会每一步。选一枚红棋，我们一起开始。';
   $('invite-button').disabled = onlineBusy || onlineJoining;
   $('difficulty').disabled = isOnline();
   if (isOnline()) renderOnlineControls();
