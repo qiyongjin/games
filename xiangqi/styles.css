@@ -30,6 +30,30 @@
 }
 @supports(font-size:1cqi){.piece{font-size:clamp(13px,6cqi,34px)}}
 .board-square.selected .piece{box-shadow:0 4px 4px #72522b4b,inset 0 0 0 1px #b79a6c,inset 0 0 0 var(--piece-face) #fff0ca,inset 0 0 0 var(--piece-rim) currentColor}
+
+/* Trace the latest move without covering legal moves or the coach's marks. */
+.board-square.last-from,.board-square.last-to{border-radius:9px;outline-offset:-3px!important}
+.board-square.last-from{
+  background:#63503438;
+  outline:2px dashed #756044;
+}
+.board-square.last-to{
+  background:#fff0a775;
+  outline:2px solid #b98629;
+  box-shadow:inset 0 0 0 5px #fff3ba40;
+}
+.board-square.last-move:not(.related):not(.hint-to)::before{content:none}
+.board-square.last-to .piece{
+  background:radial-gradient(circle at 34% 25%,#fffbea,#f9e8bd 80%);
+  box-shadow:0 3px 3px #72522b47,0 0 0 2px #fff1af,inset 0 0 0 1px #b98d3c,inset 0 0 0 var(--piece-face) #fff0ca,inset 0 0 0 var(--piece-rim) currentColor;
+}
+.board-square.last-to.selected .piece{box-shadow:0 5px 5px #72522b4b,0 0 0 2px #fff1af,inset 0 0 0 1px #b98d3c,inset 0 0 0 var(--piece-face) #fff0ca,inset 0 0 0 var(--piece-rim) currentColor}
+.board-square.last-from:focus-visible,.board-square.last-to:focus-visible{outline-color:#365d42;outline-width:3px;outline-offset:-1px!important}
+.legend-from,.legend-to{width:10px;height:10px;display:inline-block;flex:none;border-radius:2px}
+.legend-from{border:1px dashed #756044;background:#63503438}
+.legend-to{border:1px solid #b98629;background:#fff0a7;box-shadow:inset 0 0 0 1px #fff7d5}
+.last-move-description{margin-top:10px;font-size:11px;line-height:1.7;color:#737b68}
+
 .site-header{gap:16px}
 .header-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;min-width:0}
 .header-actions .header-note{margin-right:10px}
@@ -38,6 +62,9 @@
 .player-row{gap:8px}.player-info{min-width:0}.player-info>div{min-width:0}.player-avatar,.turn-badge,.move-counter{flex-shrink:0}
 .turn-badge{max-width:42%;white-space:normal;overflow-wrap:anywhere;text-align:center;line-height:1.6}
 .player-caption{overflow-wrap:anywhere}.board-legend{flex-wrap:wrap;row-gap:8px}
+.small-tag.black-tag{background:#e9ece5;color:#4c5748}
+.sound-toggle{font:inherit;color:#52694a;background:#f1f5e9;border:1px solid #d6deca;border-radius:5px;padding:5px 7px;min-height:30px;white-space:nowrap}
+.sound-toggle:hover{background:#e6eddb}.sound-toggle[aria-pressed="false"]{color:#737b68;background:transparent}
 .site-footer{flex-wrap:wrap;line-height:1.7}.privacy-note{flex-basis:100%;text-align:right;color:#7a826e}
 
 .online-panel{min-width:0;border:1px solid #d5ddc8;background:linear-gradient(140deg,#fffffa,#f4f7ec);border-radius:12px;padding:19px 21px 15px}

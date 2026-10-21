@@ -29,7 +29,8 @@
           </div>
         </div>
         <div class="player-row human-row"><div class="player-info"><span class="player-avatar red-avatar">帅</span><div><strong><span id="human-name">你</span> <span class="small-tag red-tag" id="human-side-tag">红方</span></strong><span class="player-caption" id="human-caption">红方先走，慢慢来</span></div></div><span class="move-counter" id="move-counter">第 1 回合</span></div>
-        <div class="board-legend"><span><i class="legend-dot"></i>可以走</span><span><i class="legend-ring"></i>可以吃</span><span><i class="legend-last"></i>上一步</span><span class="board-tip">点选棋子，再点落点</span></div>
+        <div class="board-legend"><span><i class="legend-dot"></i>可以走</span><span><i class="legend-ring"></i>可以吃</span><span><i class="legend-from"></i>走前（暗）</span><span><i class="legend-to"></i>走后（亮）</span><button type="button" id="sound-toggle" class="sound-toggle" aria-pressed="true" title="关闭落子音效">落子音效：开</button><span class="board-tip">点选棋子，再点落点</span></div>
+        <p id="last-move-description" class="last-move-description" role="status" aria-live="polite" hidden></p>
       </section>
 
       <aside class="learning-column" aria-label="教学与对局操作">
@@ -49,7 +50,7 @@
             <span class="coach-kicker" id="coach-kicker">第一课 · 认识棋子</span>
             <h2 id="coach-title">每一步，都有门道。</h2>
             <p id="coach-rule" class="coach-rule">点击一枚红棋，看看它的走法。棋盘上的小圆点，就是它可以去的地方。</p>
-            <div id="coach-effect-wrap" class="coach-effect"><span class="effect-label">小提示</span><p id="coach-effect">棋子放在线的交叉点上。你执红先走，落子后电脑会自动应手。</p></div>
+            <div id="coach-effect-wrap" class="coach-effect"><span class="effect-label">小提示</span><p id="coach-effect">棋子放在线的交叉点上。你执红先走，走完后点击“下一步”，电脑才会落子。</p></div>
             <details id="coach-detail" class="coach-detail" hidden><summary>再多了解一点 <svg class="chevron" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M0 0h24v24H0z" fill="none"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m6 10l6 6l6-6"/></svg></summary><p id="coach-detail-text"></p></details>
           </div>
           <div class="coach-footer"><span class="tiny-sparkle">✧</span><span id="coach-footer-text">先懂规则，再慢慢发现下棋的乐趣。</span></div>

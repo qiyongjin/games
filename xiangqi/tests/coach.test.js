@@ -81,6 +81,17 @@ test('crossing the river teaches horizontal movement without granting an extra m
   assert.match(explanation.detail, /不会立刻让它多走一步/);
 });
 
+test('soldier instructions work from either player perspective', () => {
+  for (const [side, from, to] of [['red', 54, 45], ['black', 27, 36]]) {
+    const before = positionWith([[49, 'red', 'soldier'], [from, side, 'soldier']], side);
+    const move = { from, to };
+    const explanation = explainMove(before, move, playMove(before, move));
+    assert.equal(explanation.concept, 'soldier-forward');
+    assert.match(explanation.detail, /向对方阵营前进一格/);
+    assert.doesNotMatch(explanation.detail, /上方|下方/);
+  }
+});
+
 test('a check and an escape are described as facts, without optimality claims', () => {
   const checking = positionWith([[49, 'red', 'soldier'], [18, 'red', 'rook']]);
   const checkMove = { from: 18, to: 22 };
@@ -99,9 +110,11 @@ test('black-piece inspection gives a rule without changing the position', () => 
   assert.deepEqual(describeSquare(before, 1), {
     title: '黑方马 · B1',
     rule: PIECE_RULES.horse,
-    detail: '黑方由电脑操作。你可以查看它的走法，了解对手可能如何移动。',
+    detail: '轮到己方时，选中棋子再点击高亮的合法落点可以走棋；尝试其他位置时，会解释不能走的原因。',
     highlights: [1],
   });
   assert.equal(JSON.stringify(before), snapshot);
   assert.equal(describeSquare(before, 20).highlights.length, 0);
+  assert.match(describeSquare(before, 20).detail, /己方棋子/);
+  assert.doesNotMatch(describeSquare(before, 1).detail, /电脑/);
 });

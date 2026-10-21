@@ -84,7 +84,7 @@ function movementLesson(before, move, piece) {
         concept: crossed ? 'soldier-crossed' : 'soldier-forward',
         detail: crossed
           ? '兵、卒过河后每次可向前、向左或向右走一格，仍然不能后退。过河不会立刻让它多走一步。'
-          : '兵、卒过河前每次只能向前走一格；红方向棋盘上方前进，黑方向下方前进，始终不能后退。',
+          : '兵、卒过河前每次只能向对方阵营前进一格，始终不能后退。',
         short: crossed ? '已经过河，可以向前或横走一格，仍不能后退。' : '还没过河，这步只能向前一格。',
         highlights: [to],
       };
@@ -133,11 +133,11 @@ export function explainMove(before, move, after, seenConcepts = []) {
 
 export function describeSquare(position, index) {
   const piece = position.board[index];
-  if (!piece) return { title: `空位 ${squareName(index)}`, rule: '', detail: '点击红方棋子，可以查看它的走法和合法落点。', highlights: [] };
+  if (!piece) return { title: `空位 ${squareName(index)}`, rule: '', detail: '点击己方棋子，可以查看它的走法和合法落点。', highlights: [] };
   return {
     title: `${SIDE_NAMES[piece.side]}${pieceName(piece)} · ${squareName(index)}`,
     rule: PIECE_RULES[piece.type],
-    detail: piece.side === 'black' ? '黑方由电脑操作。你可以查看它的走法，了解对手可能如何移动。' : '点击高亮的合法落点可以走棋；尝试其他位置时，会解释不能走的原因。',
+    detail: '轮到己方时，选中棋子再点击高亮的合法落点可以走棋；尝试其他位置时，会解释不能走的原因。',
     highlights: [index],
   };
 }
