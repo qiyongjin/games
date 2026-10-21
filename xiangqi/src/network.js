@@ -80,7 +80,10 @@ export function createOnlineClient({ onUpdate, onError }) {
     return null;
   }
   function update(next) {
-    if (room && next.id === room.id && next.version < room.version) return;
+    if (room && next.id === room.id) {
+      const nextRound = next.round ?? 1, currentRound = room.round ?? 1;
+      if (nextRound < currentRound || (nextRound === currentRound && next.version < room.version)) return;
+    }
     room = next;
     onUpdate(room);
   }
@@ -132,8 +135,10 @@ export function createOnlineClient({ onUpdate, onError }) {
   return {
     create: () => enter(null),
     join: id => enter(id),
-    ready: value => send('ready', { ready: value }),
-    move: move => send('move', { ...move, version: room.version }),
+    ready: value => send('ready', { ready: value, round: room?.round ?? 1 }),
+    move: move => send('move', { ...move, version: room.version, round: room.round ?? 1 }),
+    requestRematch: () => send('rematch', { action: 'request', round: room?.round ?? 1 }),
+    acceptRematch: () => send('rematch', { action: 'accept', round: room?.round ?? 1 }),
     sync: () => send('sync'),
     async leave() {
       const previous = room, previousToken = token;
@@ -141,7 +146,7 @@ export function createOnlineClient({ onUpdate, onError }) {
       const url = new URL(location.href); url.searchParams.delete('room'); history.replaceState(null, '', url);
       if (previous) {
         remember(previous.id, null);
-        await requestJSON(`/api/rooms/${encodeURIComponent(previous.id)}/leave`, { body: {}, token: previousToken }).catch(() => {});
+        await requestJSON(`/api/rooms/${encodeURIComponent(previous.id)}/leave`, { body: { round: previous.round ?? 1 }, token: previousToken }).catch(() => {});
       }
     },
     dispose() { ++generation; clearTimeout(timer); },

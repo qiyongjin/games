@@ -100,7 +100,7 @@ test('creating a room remembers its credential and shares only the room ID', asy
   assert.ok(env.historyCalls.every(url => !url.includes(bearer('red-secret'))));
   await client.ready(true);
   assert.equal(env.requests.at(-1).headers.Authorization, `Bearer ${bearer('red-secret')}`);
-  assert.deepEqual(env.requests.at(-1).body, { ready: true });
+  assert.deepEqual(env.requests.at(-1).body, { ready: true, round: 1 });
   await env.poll();
   assert.equal(env.requests.at(-1).path, `/api/rooms/${room.id}/sync`);
   assert.equal(env.requests.at(-1).headers.Authorization, `Bearer ${bearer('red-secret')}`);
@@ -121,7 +121,7 @@ test('opening the invitation in another tab restores the saved seat by sync', as
   assert.equal(JSON.parse(env.session.getItem(key('ongoing'))).token, bearer('black-secret'));
   await client.move({ from: 27, to: 36 });
   assert.equal(env.requests.at(-1).headers.Authorization, `Bearer ${bearer('black-secret')}`);
-  assert.deepEqual(env.requests.at(-1).body, { from: 27, to: 36, version: 7 });
+  assert.deepEqual(env.requests.at(-1).body, { from: 27, to: 36, version: 7, round: 1 });
   client.dispose();
 });
 
@@ -324,4 +324,142 @@ test('dispose cancels polling but retains credentials for reopening', async t =>
   assert.equal(env.errors.length, 0);
   assert.equal(env.timers.size, 0);
   assert.equal(JSON.parse(env.local.getItem(key('room-one'))).token, bearer('red-secret'));
+});
+
+test('requesting another game retains the pending invitation until the opponent accepts', async t => {
+  const env = environment(t);
+  const finished = { ...roomView('rematch', 12), round: 1, phase: 'ended', outcome: { winner: 'red' }, rematch: null };
+  const pending = { ...finished, version: 13, rematch: { requestedBy: 'red' } };
+  env.respond(request => request.path === '/api/rooms'
+    ? { data: { room: finished, token: bearer('red-secret') } }
+    : { data: { room: pending } });
+  const client = env.client();
+  await client.create();
+  await client.requestRematch();
+  assert.equal(env.requests.at(-1).path, '/api/rooms/rematch/rematch');
+  assert.equal(env.requests.at(-1).headers.Authorization, `Bearer ${bearer('red-secret')}`);
+  assert.deepEqual(env.requests.at(-1).body, { action: 'request', round: 1 });
+  assert.equal(env.updates.at(-1).phase, 'ended');
+  assert.equal(env.updates.at(-1).rematch.requestedBy, 'red');
+  await env.poll();
+  assert.equal(env.updates.at(-1).rematch.requestedBy, 'red');
+  assert.equal(env.requests.filter(request => request.path.endsWith('/rematch')).length, 1);
+  client.dispose();
+});
+
+test('the second request exposes the existing invitation and only an explicit acceptance starts a round', async t => {
+  const env = environment(t);
+  const finished = { ...roomView('rematch', 13, 'black'), round: 1, phase: 'ended', rematch: null };
+  const incoming = { ...finished, version: 14, rematch: { requestedBy: 'red' } };
+  const restarted = { ...roomView('rematch', 15, 'black'), round: 2, rematch: null };
+  env.respond(request => {
+    if (request.path.endsWith('/join')) return { data: { room: finished, token: bearer('black-secret') } };
+    return { data: { room: request.body.action === 'accept' ? restarted : incoming } };
+  });
+  const client = env.client();
+  await client.join('rematch');
+  await client.requestRematch();
+  assert.equal(env.updates.at(-1).phase, 'ended');
+  assert.deepEqual(env.updates.at(-1).rematch, { requestedBy: 'red' });
+  assert.deepEqual(env.requests.at(-1).body, { action: 'request', round: 1 });
+  await client.acceptRematch();
+  assert.deepEqual(env.requests.at(-1).body, { action: 'accept', round: 1 });
+  assert.equal(env.requests.at(-1).headers.Authorization, `Bearer ${bearer('black-secret')}`);
+  assert.equal(env.updates.at(-1).phase, 'playing');
+  assert.equal(env.updates.at(-1).round, 2);
+  assert.equal(env.updates.at(-1).you, 'black');
+  await client.move({ from: 27, to: 36 });
+  assert.deepEqual(env.requests.at(-1).body, { from: 27, to: 36, version: 15, round: 2 });
+  await client.ready(true);
+  assert.deepEqual(env.requests.at(-1).body, { ready: true, round: 2 });
+  await client.leave();
+  assert.deepEqual(env.requests.at(-1).body, { round: 2 });
+});
+
+test('a delayed previous-round poll cannot restore the finished board after accepting a rematch', async t => {
+  const env = environment(t);
+  const pendingPoll = deferred();
+  const finished = {
+    ...roomView('rematch', 20, 'black'), round: 1, phase: 'ended',
+    moves: [{ from: 27, to: 36 }], rematch: { requestedBy: 'red' },
+  };
+  const restarted = { ...roomView('rematch', 21, 'black'), round: 2, rematch: null };
+  env.respond(request => {
+    if (request.path.endsWith('/join')) return { data: { room: finished, token: bearer('black-secret') } };
+    if (request.path.endsWith('/sync')) return pendingPoll.promise;
+    return { data: { room: restarted } };
+  });
+  const client = env.client();
+  await client.join('rematch');
+  const polling = env.poll();
+  await client.acceptRematch();
+  pendingPoll.resolve({ data: { room: finished } });
+  await polling;
+  assert.deepEqual(env.updates, [finished, restarted]);
+  assert.deepEqual(env.updates.at(-1).moves, []);
+  assert.equal(env.timers.size, 1);
+  client.dispose();
+});
+
+test('rounds outrank versions and legacy responses cannot replace an accepted newer round', async t => {
+  const env = environment(t);
+  const finished = { ...roomView('rematch', 40, 'black'), round: 1, phase: 'ended', rematch: { requestedBy: 'red' } };
+  const restarted = { ...roomView('rematch', 41, 'black'), round: 2, rematch: null };
+  const moved = { ...restarted, version: 42, moves: [{ from: 27, to: 36 }] };
+  const responses = [
+    // Round identity is authoritative even if a response carries a larger move version.
+    { ...finished, version: 100 },
+    roomView('rematch', 100, 'black'),
+    moved,
+    restarted,
+  ];
+  env.respond(request => {
+    if (request.path.endsWith('/join')) return { data: { room: finished, token: bearer('black-secret') } };
+    if (request.path.endsWith('/rematch')) return { data: { room: restarted } };
+    return { data: { room: responses.shift() } };
+  });
+  const client = env.client();
+  await client.join('rematch');
+  await client.acceptRematch();
+  for (let index = 0; index < 4; index += 1) await client.sync();
+  assert.deepEqual(env.updates, [finished, restarted, moved]);
+  client.dispose();
+});
+
+test('legacy room views send round one for rematch actions and leave', async t => {
+  const env = environment(t);
+  const room = { ...roomView('legacy-rematch'), phase: 'ended' };
+  env.respond(() => ({ data: { room, token: bearer('legacy-secret') } }));
+  const client = env.client();
+  await client.join(room.id);
+  await client.requestRematch();
+  assert.deepEqual(env.requests.at(-1).body, { action: 'request', round: 1 });
+  await client.acceptRematch();
+  assert.deepEqual(env.requests.at(-1).body, { action: 'accept', round: 1 });
+  await client.leave();
+  assert.deepEqual(env.requests.at(-1).body, { round: 1 });
+});
+
+test('an old move response cannot roll back a rematch or assign its version to the next move', async t => {
+  const env = environment(t);
+  const oldMove = deferred();
+  const initial = { ...roomView('rematch', 5, 'black'), round: 1 };
+  const restarted = { ...roomView('rematch', 8, 'black'), round: 2, rematch: null };
+  let moveCount = 0;
+  env.respond(request => {
+    if (request.path.endsWith('/join')) return { data: { room: initial, token: bearer('black-secret') } };
+    if (request.path.endsWith('/move') && moveCount++ === 0) return oldMove.promise;
+    return { data: { room: restarted } };
+  });
+  const client = env.client();
+  await client.join('rematch');
+  const moving = client.move({ from: 27, to: 36 });
+  assert.deepEqual(env.requests.at(-1).body, { from: 27, to: 36, version: 5, round: 1 });
+  await client.acceptRematch();
+  oldMove.resolve({ data: { room: { ...initial, version: 6, moves: [{ from: 27, to: 36 }] } } });
+  await moving;
+  assert.deepEqual(env.updates, [initial, restarted]);
+  await client.move({ from: 27, to: 36 });
+  assert.deepEqual(env.requests.at(-1).body, { from: 27, to: 36, version: 8, round: 2 });
+  client.dispose();
 });

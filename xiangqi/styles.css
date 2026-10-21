@@ -38,21 +38,27 @@
   outline:2px dashed #756044;
 }
 .board-square.last-to{
-  background:#fff0a775;
-  outline:2px solid #b98629;
-  box-shadow:inset 0 0 0 5px #fff3ba40;
+  background:#edf0ed99;
+  outline:2px solid #b3bab5;
+  box-shadow:inset 0 0 0 5px #ffffff40;
 }
 .board-square.last-move:not(.related):not(.hint-to)::before{content:none}
 .board-square.last-to .piece{
-  background:radial-gradient(circle at 34% 25%,#fffbea,#f9e8bd 80%);
-  box-shadow:0 3px 3px #72522b47,0 0 0 2px #fff1af,inset 0 0 0 1px #b98d3c,inset 0 0 0 var(--piece-face) #fff0ca,inset 0 0 0 var(--piece-rim) currentColor;
+  background:radial-gradient(circle at 34% 25%,#fcfdfb,#edf0ec 80%);
+  box-shadow:0 3px 3px #72522b47,0 0 0 2px #e7ebe7,inset 0 0 0 1px #b2b9b2,inset 0 0 0 var(--piece-face) #f4f6f1,inset 0 0 0 var(--piece-rim) currentColor;
 }
-.board-square.last-to.selected .piece{box-shadow:0 5px 5px #72522b4b,0 0 0 2px #fff1af,inset 0 0 0 1px #b98d3c,inset 0 0 0 var(--piece-face) #fff0ca,inset 0 0 0 var(--piece-rim) currentColor}
+.board-square.last-to.selected .piece{box-shadow:0 5px 5px #72522b4b,0 0 0 2px #e7ebe7,inset 0 0 0 1px #b2b9b2,inset 0 0 0 var(--piece-face) #f4f6f1,inset 0 0 0 var(--piece-rim) currentColor}
 .board-square.last-from:focus-visible,.board-square.last-to:focus-visible{outline-color:#365d42;outline-width:3px;outline-offset:-1px!important}
 .legend-from,.legend-to{width:10px;height:10px;display:inline-block;flex:none;border-radius:2px}
 .legend-from{border:1px dashed #756044;background:#63503438}
-.legend-to{border:1px solid #b98629;background:#fff0a7;box-shadow:inset 0 0 0 1px #fff7d5}
+.legend-to{border:1px solid #b3bab5;background:#edf0ed;box-shadow:inset 0 0 0 1px #f8faf7}
 .last-move-description{margin-top:10px;font-size:11px;line-height:1.7;color:#737b68}
+.capture-notice{display:flex;align-items:baseline;gap:9px;margin-top:14px;padding:10px 12px;border:1px solid #ccd9c4;border-radius:7px;background:#eef3e9;color:#3e5d3e;font-size:12px;line-height:1.7}
+.capture-notice strong{font-weight:500;overflow-wrap:anywhere}
+.capture-notice-label{flex-shrink:0;font-size:10px;letter-spacing:1px;opacity:.8}
+.capture-notice[data-kind="opponent"]{background:#faf0e9;border-color:#e2cabc;color:#90533e}
+#endgame-dialog .endgame-error{color:#a24e3c;font-size:12px}
+#endgame-dialog[data-kind="invitation"] .dialog-icon{color:#597b50}
 
 .site-header{gap:16px}
 .header-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;min-width:0}

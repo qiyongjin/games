@@ -202,7 +202,7 @@ export async function createXiangqiServer(options = {}) {
   function roomView(room, side) {
     const online = seat => Boolean(seat && !seat.left && now() - seat.lastSeen <= onlineMs);
     const player = seat => ({ joined: Boolean(seat && !seat.left), online: online(seat), ready: Boolean(seat && !seat.left && seat.ready) });
-    return { id: room.id, phase: room.phase, you: side, players: { red: player(room.red), black: player(room.black) }, moves: room.moves, outcome: room.session.outcome || room.outcome || null, version: room.version };
+    return { id: room.id, phase: room.phase, you: side, players: { red: player(room.red), black: player(room.black) }, moves: room.moves, outcome: room.session.outcome || room.outcome || null, version: room.version, round: room.round, rematch: room.rematch };
   }
   function authenticatedRoomSeat(request, room) {
     const header = request.headers.authorization || '';
@@ -226,19 +226,20 @@ export async function createXiangqiServer(options = {}) {
       room.version += 1;
     }
   }
+  const roomGameId = room => room.round === 1 ? `room:${room.id}` : `room:${room.id}:round:${room.round}`;
   async function recordRoomStart(room) {
     const timestamp = new Date(now()).toISOString();
     await storage.update(state => {
-      if (state.games.some(game => game.id === `room:${room.id}`)) return;
+      if (state.games.some(game => game.id === roomGameId(room))) return;
       const players = [room.red, room.black];
-      state.games.push({ id: `room:${room.id}`, mode: 'online', status: 'playing', startedAt: timestamp, completedAt: null, visitorIds: [...new Set(players.map(seat => seat.visitorId))], ips: [...new Set(players.map(seat => seat.ip))] });
+      state.games.push({ id: roomGameId(room), mode: 'online', status: 'playing', startedAt: timestamp, completedAt: null, visitorIds: [...new Set(players.map(seat => seat.visitorId))], ips: [...new Set(players.map(seat => seat.ip))] });
       for (const visitor of state.visitors) if (players.some(seat => seat.visitorId === visitor.id)) visitor.startedGames += 1;
       prune(state);
     });
   }
   async function recordRoomFinish(room) {
     await storage.update(state => {
-      const game = state.games.find(game => game.id === `room:${room.id}`);
+      const game = state.games.find(game => game.id === roomGameId(room));
       if (!game || game.status !== 'playing') return;
       game.status = 'finished';
       game.completedAt = new Date(now()).toISOString();
@@ -250,7 +251,7 @@ export async function createXiangqiServer(options = {}) {
       if (now() - room.lastActivity > roomTTL || now() - room.createdAt > DAY) {
         rooms.delete(id);
         if (room.phase === 'playing') await storage.update(state => {
-          const game = state.games.find(game => game.id === `room:${id}`);
+          const game = state.games.find(game => game.id === roomGameId(room));
           if (game?.status === 'playing') game.status = 'abandoned';
         });
       }
@@ -369,7 +370,7 @@ export async function createXiangqiServer(options = {}) {
       });
       return sendJSON(response, 200, { ok: true });
     }
-    if ((pathname === '/api/rooms' || /^\/api\/rooms\/[A-Za-z0-9_-]{24}\/(?:join|sync|ready|move|leave)$/.test(pathname)) && request.method === 'POST') {
+    if ((pathname === '/api/rooms' || /^\/api\/rooms\/[A-Za-z0-9_-]{24}\/(?:join|sync|ready|move|leave|rematch)$/.test(pathname)) && request.method === 'POST') {
       const body = await readJSON(request, 4_000);
       return serializeRooms(async () => {
         await sweepRooms();
@@ -379,7 +380,7 @@ export async function createXiangqiServer(options = {}) {
           const visitor = await visitorFor(request, response);
           const id = randomBytes(18).toString('base64url');
           const secret = seatToken({ id }, 'red', visitor.id);
-          const room = { id, phase: 'waiting', red: { hash: digest(secret), visitorId: visitor.id, ip, lastSeen: now(), ready: false }, black: null, session: createSession(), moves: [], version: 0, createdAt: now(), lastActivity: now() };
+          const room = { id, phase: 'waiting', red: { hash: digest(secret), visitorId: visitor.id, ip, lastSeen: now(), ready: false }, black: null, session: createSession(), moves: [], version: 0, round: 1, rematch: null, createdAt: now(), lastActivity: now() };
           rooms.set(id, room);
           return sendJSON(response, 201, { room: roomView(room, 'red'), token: secret });
         }
@@ -388,9 +389,9 @@ export async function createXiangqiServer(options = {}) {
         if (!room) fail(404, '棋局不存在或已过期，请重新创建邀请。', 'room_unavailable');
         if (action === 'join') {
           rateLimit(`join-room:${ip}`, 60, 60_000);
-          if (room.phase === 'finished') fail(409, '此棋局已结束，请重新创建邀请。', 'room_unavailable');
           const visitorId = knownVisitor(request)?.id;
           const returningSide = authenticatedRoomSeat(request, room) || ['red', 'black'].find(side => visitorId && room[side]?.visitorId === visitorId && !room[side].left);
+          if (room.phase === 'finished' && (!returningSide || room.red.left || room.black?.left || !room.session.outcome)) fail(409, '此棋局已结束，请重新创建邀请。', 'room_unavailable');
           if (returningSide) {
             const seat = room[returningSide];
             await visitorFor(request, response, { trustedVisitorId: seat.visitorId });
@@ -416,6 +417,26 @@ export async function createXiangqiServer(options = {}) {
           }
           return sendJSON(response, 200, { room: roomView(room, side) });
         }
+        // The initial round accepts older clients. Once a room is reused, every
+        // mutation identifies its round so delayed packets cannot affect the next game.
+        if ((body.round !== undefined || room.round > 1 || action === 'rematch') && (!Number.isInteger(body.round) || body.round !== room.round)) fail(409, '棋局已开始新的一局，请同步后再操作。');
+        if (action === 'rematch') {
+          if (!['request', 'accept'].includes(body.action)) fail(400, '请选择再来一局或接受邀请。');
+          if (room.phase !== 'finished' || !room.session.outcome || !room.black || room.red.left || room.black.left) fail(409, '此棋局无法继续，请重新邀请好友。');
+          if (body.action === 'request') {
+            if (!room.rematch) { room.rematch = { requestedBy: side }; room.version += 1; }
+          } else {
+            if (!room.rematch) fail(409, '还没有再来一局的邀请。');
+            if (room.rematch.requestedBy === side) fail(403, '请等待对方接受再来一局的邀请。');
+            const view = roomView(room, side);
+            if (!view.players.red.online || !view.players.black.online) fail(409, '对手暂时离线，恢复在线后可继续。');
+            const nextRound = { ...room, round: room.round + 1, phase: 'playing', session: createSession(), moves: [], outcome: null, rematch: null, version: room.version + 1 };
+            await recordRoomStart(nextRound);
+            Object.assign(room, nextRound);
+            room.red.ready = true; room.black.ready = true;
+          }
+          return sendJSON(response, 200, { room: roomView(room, side) });
+        }
         if (action === 'ready') {
           if (room.phase !== 'waiting') fail(409, '本局已开始或已结束。');
           if (typeof body.ready !== 'boolean') fail(400, '请确认是否准备开始。');
@@ -429,7 +450,7 @@ export async function createXiangqiServer(options = {}) {
             room.outcome = { winner: side === 'red' ? 'black' : 'red', reason: 'resign', title: `${side === 'red' ? '黑' : '红'}方胜利`, message: '对手离开棋局，本局结束。' };
             await recordRoomFinish(room);
           }
-          room.phase = 'finished'; seat.left = true; seat.ready = false; room.version += 1;
+          room.phase = 'finished'; room.rematch = null; seat.left = true; seat.ready = false; room.version += 1;
           return sendJSON(response, 200, { room: roomView(room, side) });
         }
         if (action === 'move') {

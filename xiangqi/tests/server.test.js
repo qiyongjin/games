@@ -60,6 +60,17 @@ async function startedRoom(f) {
   assert.equal(readyBlack.data.room.phase, 'playing');
   return { red, black, id, redHeaders, blackHeaders, room: readyBlack.data.room, created, joined };
 }
+async function finishRoom(r, room = r.room) {
+  for (let i = 0; i < finishedMoves.length; i++) {
+    const player = i % 2 ? r.black : r.red;
+    const headers = i % 2 ? r.blackHeaders : r.redHeaders;
+    const moved = await player.post(`/api/rooms/${r.id}/move`, { ...finishedMoves[i], version: room.version, round: room.round }, headers);
+    assert.equal(moved.status, 200);
+    room = moved.data.room;
+  }
+  assert.equal(room.phase, 'finished');
+  return room;
+}
 
 test('private statistics and IP details require a valid admin session', async t => {
   const f = await fixture(t);
@@ -368,8 +379,12 @@ test('online terminal results are verified and counted once for both players', a
   assert.equal(room.phase, 'finished');
   assert.equal(room.outcome.reason, 'repetition');
   const finishedJoin = await r.red.post(`/api/rooms/${r.id}/join`);
-  assert.equal(finishedJoin.status, 409);
-  assert.equal(finishedJoin.data.code, 'room_unavailable');
+  assert.equal(finishedJoin.status, 200);
+  assert.equal(finishedJoin.data.room.you, 'red');
+  assert.deepEqual(finishedJoin.data.room.outcome, room.outcome);
+  const outsiderJoin = await f.client().post(`/api/rooms/${r.id}/join`);
+  assert.equal(outsiderJoin.status, 409);
+  assert.equal(outsiderJoin.data.code, 'room_unavailable');
   assert.equal((await r.red.post(`/api/rooms/${r.id}/move`, { from: 54, to: 45, version: room.version }, r.redHeaders)).status, 409);
   await r.red.post(`/api/rooms/${r.id}/sync`, {}, r.redHeaders);
   await f.login();
@@ -381,6 +396,169 @@ test('online terminal results are verified and counted once for both players', a
   assert.equal(stats.games[0].mode, 'online');
   assert.equal(stats.games[0].visitorIds.length, 2);
   assert.equal(stats.visitors.filter(visitor => visitor.completedGames === 1).length, 2);
+});
+
+test('rematch invitations serialize simultaneous requests and require the recipient to explicitly accept', async t => {
+  const f = await fixture(t);
+  const r = await startedRoom(f);
+  assert.equal(r.room.round, 1);
+  assert.equal(r.room.rematch, null);
+  const path = `/api/rooms/${r.id}/rematch`;
+  assert.equal((await r.red.post(path, { action: 'request', round: 1 }, r.redHeaders)).status, 409);
+  const finished = await finishRoom(r);
+  assert.equal((await r.red.post(path, { action: 'request' }, r.redHeaders)).status, 409);
+  assert.equal((await r.red.post(path, { action: 'decline', round: 1 }, r.redHeaders)).status, 400);
+  assert.equal((await r.red.post(path, { action: 'accept', round: 1 }, r.redHeaders)).status, 409);
+  assert.equal((await f.client().post(path, { action: 'request', round: 1 })).status, 401);
+  const requests = await Promise.all([
+    r.red.post(path, { action: 'request', round: 1 }, r.redHeaders),
+    r.black.post(path, { action: 'request', round: 1 }, r.blackHeaders),
+  ]);
+  assert.deepEqual(requests.map(result => result.status), [200, 200]);
+  const pending = requests[0].data.room;
+  assert.equal(pending.phase, 'finished');
+  assert.equal(pending.round, 1);
+  assert.equal(pending.version, finished.version + 1);
+  assert.deepEqual(pending.moves, finished.moves);
+  assert.deepEqual(requests[1].data.room.rematch, pending.rematch);
+  assert.equal(requests[1].data.room.version, pending.version);
+  const requester = pending.rematch.requestedBy;
+  assert.ok(['red', 'black'].includes(requester));
+  const recipient = requester === 'red' ? 'black' : 'red';
+  assert.equal((await r[requester].post(path, { action: 'accept', round: 1 }, r[`${requester}Headers`])).status, 403);
+  const acceptances = await Promise.all([
+    r[recipient].post(path, { action: 'accept', round: 1 }, r[`${recipient}Headers`]),
+    r[recipient].post(path, { action: 'accept', round: 1 }, r[`${recipient}Headers`]),
+  ]);
+  assert.deepEqual(acceptances.map(result => result.status).sort(), [200, 409]);
+  const accepted = acceptances.find(result => result.status === 200);
+  const next = accepted.data.room;
+  assert.equal(next.phase, 'playing');
+  assert.equal(next.round, 2);
+  assert.equal(next.version, pending.version + 1);
+  assert.deepEqual(next.moves, []);
+  assert.equal(next.outcome, null);
+  assert.equal(next.rematch, null);
+  assert.equal(next.players.red.ready, true);
+  assert.equal(next.players.black.ready, true);
+  for (const action of ['request', 'accept']) assert.equal((await r[recipient].post(path, { action, round: 1 }, r[`${recipient}Headers`])).status, 409);
+  for (const action of ['move', 'leave', 'ready']) {
+    const body = { from: 54, to: 45, ready: true, version: next.version };
+    for (const round of [undefined, 1]) assert.equal((await r.red.post(`/api/rooms/${r.id}/${action}`, { ...body, ...(round === undefined ? {} : { round }) }, r.redHeaders)).status, 409);
+  }
+  for (const [side, original] of [['red', r.created], ['black', r.joined]]) {
+    const restored = await r[side].post(`/api/rooms/${r.id}/join`);
+    assert.equal(restored.data.token, original.data.token);
+    assert.equal(restored.data.room.you, side);
+    assert.equal(restored.data.room.round, 2);
+    assert.equal(restored.data.room.players[side].joined, true);
+  }
+  const moved = await r.red.post(`/api/rooms/${r.id}/move`, { from: 54, to: 45, round: 2, version: next.version }, r.redHeaders);
+  assert.equal(moved.status, 200);
+  assert.deepEqual(moved.data.room.moves, [{ from: 54, to: 45 }]);
+});
+
+test('finished players recover their original seats and a pending invitation across browser tabs', async t => {
+  const f = await fixture(t);
+  const r = await startedRoom(f);
+  const finished = await finishRoom(r);
+  const invited = await r.black.post(`/api/rooms/${r.id}/rematch`, { action: 'request', round: 1 }, r.blackHeaders);
+  for (const [side, credential] of [['red', r.created], ['black', r.joined]]) {
+    const reopened = f.client();
+    reopened.cookies.set('yibu_visitor', r[side].cookies.get('yibu_visitor'));
+    const restored = await reopened.post(`/api/rooms/${r.id}/join`);
+    assert.equal(restored.status, 200);
+    assert.equal(restored.data.token, credential.data.token);
+    assert.equal(restored.data.room.you, side);
+    assert.equal(restored.data.room.version, invited.data.room.version);
+    assert.deepEqual(restored.data.room.moves, finished.moves);
+    assert.deepEqual(restored.data.room.rematch, { requestedBy: 'black' });
+  }
+  const recovered = f.client();
+  const bearerRecovery = await recovered.post(`/api/rooms/${r.id}/join`, {}, r.redHeaders);
+  assert.equal(bearerRecovery.status, 200);
+  assert.equal(recovered.cookies.get('yibu_visitor'), r.red.cookies.get('yibu_visitor'));
+  assert.deepEqual(bearerRecovery.data.room.rematch, { requestedBy: 'black' });
+  const outsider = await f.client().post(`/api/rooms/${r.id}/join`);
+  assert.equal(outsider.status, 409);
+  assert.equal(outsider.data.code, 'room_unavailable');
+});
+
+test('an offline requester keeps a pending invitation until both original players are online', async t => {
+  let timestamp = Date.now();
+  const f = await fixture(t, { now: () => timestamp, onlineMs: 1_000 });
+  const r = await startedRoom(f);
+  await finishRoom(r);
+  const path = `/api/rooms/${r.id}/rematch`;
+  await r.red.post(path, { action: 'request', round: 1 }, r.redHeaders);
+  timestamp += 1_001;
+  const offline = await r.black.post(path, { action: 'accept', round: 1 }, r.blackHeaders);
+  assert.equal(offline.status, 409);
+  const synced = await r.red.post(`/api/rooms/${r.id}/sync`, {}, r.redHeaders);
+  assert.equal(synced.data.room.phase, 'finished');
+  assert.deepEqual(synced.data.room.rematch, { requestedBy: 'red' });
+  const accepted = await r.black.post(path, { action: 'accept', round: 1 }, r.blackHeaders);
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.data.room.round, 2);
+});
+
+test('exiting a finished game revokes the seat and cancels a pending rematch for the other player', async t => {
+  const f = await fixture(t);
+  const r = await startedRoom(f);
+  const finished = await finishRoom(r);
+  const path = `/api/rooms/${r.id}/rematch`;
+  await r.red.post(path, { action: 'request', round: 1 }, r.redHeaders);
+  const left = await r.black.post(`/api/rooms/${r.id}/leave`, { round: 1 }, r.blackHeaders);
+  assert.equal(left.status, 200);
+  assert.equal(left.data.room.rematch, null);
+  assert.deepEqual(left.data.room.outcome, finished.outcome);
+  const synced = await r.red.post(`/api/rooms/${r.id}/sync`, {}, r.redHeaders);
+  assert.equal(synced.data.room.players.black.joined, false);
+  assert.equal(synced.data.room.rematch, null);
+  assert.equal((await r.red.post(path, { action: 'request', round: 1 }, r.redHeaders)).status, 409);
+  assert.equal((await r.black.post(path, { action: 'accept', round: 1 }, r.blackHeaders)).status, 403);
+  assert.equal((await r.red.post(`/api/rooms/${r.id}/join`)).status, 409);
+  await f.login();
+  assert.equal((await f.admin.request('/api/admin/stats')).data.summary.completedGames, 1);
+});
+
+test('rematched games count distinct rounds once while preserving both players in statistics', async t => {
+  const f = await fixture(t);
+  const r = await startedRoom(f);
+  await finishRoom(r);
+  const path = `/api/rooms/${r.id}/rematch`;
+  await r.black.post(path, { action: 'request', round: 1 }, r.blackHeaders);
+  const accepted = await r.red.post(path, { action: 'accept', round: 1 }, r.redHeaders);
+  const second = await finishRoom(r, accepted.data.room);
+  assert.equal(second.round, 2);
+  await r.red.post(`/api/rooms/${r.id}/sync`, {}, r.redHeaders);
+  await r.black.post(`/api/rooms/${r.id}/join`);
+  await f.login();
+  const stats = (await f.admin.request('/api/admin/stats')).data;
+  assert.equal(stats.summary.startedGames, 2);
+  assert.equal(stats.summary.completedGames, 2);
+  assert.equal(stats.summary.players, 2);
+  assert.deepEqual(stats.games.map(game => game.id).sort(), [`room:${r.id}`, `room:${r.id}:round:2`]);
+  assert.equal(stats.games.every(game => game.status === 'finished'), true);
+  assert.equal(stats.visitors.length, 2);
+  assert.equal(stats.visitors.every(visitor => visitor.startedGames === 2 && visitor.completedGames === 2), true);
+});
+
+test('expiring a rematch abandons only the active round and retains the first completed game', async t => {
+  let timestamp = Date.now();
+  const f = await fixture(t, { now: () => timestamp, roomTTL: 1_000 });
+  const r = await startedRoom(f);
+  await finishRoom(r);
+  const path = `/api/rooms/${r.id}/rematch`;
+  await r.red.post(path, { action: 'request', round: 1 }, r.redHeaders);
+  await r.black.post(path, { action: 'accept', round: 1 }, r.blackHeaders);
+  timestamp += 1_001;
+  await f.login();
+  const stats = (await f.admin.request('/api/admin/stats')).data;
+  assert.equal(stats.summary.startedGames, 2);
+  assert.equal(stats.summary.completedGames, 1);
+  assert.equal(stats.games.find(game => game.id === `room:${r.id}`).status, 'finished');
+  assert.equal(stats.games.find(game => game.id === `room:${r.id}:round:2`).status, 'abandoned');
 });
 
 test('leaving resigns an active game and revokes the leaving seat', async t => {

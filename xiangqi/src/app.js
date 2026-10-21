@@ -7,6 +7,8 @@ import { initializeFeedback } from './feedback.js';
 import { createOnlineClient, initializeVisitTracking, requestJSON } from './network.js';
 import { viewSquare, adjacentSquare, fileLabels } from './board-view.js';
 import { createMoveSound } from './move-sound.js';
+import { describeCapture } from './capture-feedback.js';
+import { getEndgameView } from './endgame.js';
 
 const $ = id => document.getElementById(id);
 const sideName = side => side === 'red' ? '红方' : '黑方';
@@ -43,6 +45,10 @@ let storageWarned = false;
 let keyboardSquare = 87;
 let historyRenderKey = '';
 let coachRenderKey = '';
+let endgameView = null;
+let endgameKey = null;
+let dismissedEndgameKey = null;
+let endgameError = '';
 const squareButtons = [];
 const squareRows = [];
 const boardFileLabels = { top: [], bottom: [] };
@@ -54,8 +60,9 @@ const canPlay = () => !session.outcome && !onlineBusy && !onlineJoining && !onli
   && session.position.turn === playerSide() && (!onlineRoom || onlineRoom.phase === 'playing' && bothOnline());
 const onlineClient = createOnlineClient({
   onUpdate(room) {
-    const hasNewMove = onlineRoom?.id === room.id && room.moves.length > onlineRoom.moves.length;
-    const changed = !onlineRoom || onlineRoom.id !== room.id || onlineRoom.moves.length !== room.moves.length;
+    const sameRound = onlineRoom?.id === room.id && onlineRoom.round === room.round;
+    const hasNewMove = sameRound && room.moves.length > onlineRoom.moves.length;
+    const changed = !sameRound || onlineRoom.moves.length !== room.moves.length;
     onlineRoom = room; onlineJoining = false; onlineError = '';
     if (changed) {
       cancelTask(); clearSelection();
@@ -233,6 +240,64 @@ function showNotice(message, error = false) {
   $('notice').hidden = !message;
 }
 
+function resultKey(view) {
+  const game = onlineRoom ? `${onlineRoom.id}/${onlineRoom.round ?? 1}` : gameId;
+  return `${game}/${view.kind}/${onlineRoom?.rematch?.requestedBy ?? ''}`;
+}
+
+function renderEndgameDialog(force = false) {
+  const dialog = $('endgame-dialog');
+  const view = onlineJoining ? null : getEndgameView({ outcome: session.outcome, room: onlineRoom, side: playerSide() });
+  if (!view) {
+    endgameView = null; endgameKey = null; dismissedEndgameKey = null; endgameError = '';
+    if (dialog.open) dialog.close();
+    return;
+  }
+  const key = resultKey(view);
+  if (key !== endgameKey) endgameError = '';
+  endgameView = view; endgameKey = key;
+  $('endgame-title').textContent = view.title;
+  $('endgame-description').textContent = view.description ?? '';
+  $('endgame-primary').textContent = view.primaryLabel;
+  $('endgame-primary').disabled = view.primaryDisabled || onlineBusy || !!onlineError;
+  $('endgame-exit').disabled = onlineBusy;
+  $('endgame-error').textContent = endgameError;
+  $('endgame-error').hidden = !endgameError;
+  dialog.dataset.kind = view.kind;
+  const anotherDialog = document.querySelector('dialog[open]:not(#endgame-dialog)');
+  if (!dialog.open && !anotherDialog && (force || dismissedEndgameKey !== key)) dialog.showModal();
+}
+
+async function respondToEndgame() {
+  if (!endgameView || onlineBusy) return;
+  const action = endgameView.primaryAction;
+  if (action === 'restart') { restart(); return; }
+  if (action === 'invite') { await leaveOnline(true); return; }
+  onlineBusy = true; endgameError = ''; render();
+  try {
+    if (action === 'request') await onlineClient.requestRematch();
+    else if (action === 'accept') await onlineClient.acceptRematch();
+    showNotice('');
+  } catch (error) {
+    endgameError = error.message || '操作未完成，请稍后重试。';
+    await onlineClient.sync().catch(() => {});
+  } finally { onlineBusy = false; render(); }
+}
+
+async function leaveOnline(inviteAgain = false) {
+  if (onlineBusy) return;
+  onlineBusy = true; render();
+  await onlineClient.leave();
+  cancelTask(); clearSelection();
+  session = { ...soloSession, teaching: session.teaching, difficulty: session.difficulty };
+  onlineRoom = null; onlineJoining = false; onlineError = ''; onlineBusy = false;
+  const previousResult = getEndgameView({ outcome: session.outcome });
+  dismissedEndgameKey = previousResult ? resultKey(previousResult) : null;
+  if ($('endgame-dialog').open) $('endgame-dialog').close();
+  if (inviteAgain) { await enterOnline(); return; }
+  showNotice('已退出好友对局，返回电脑对弈。'); render();
+}
+
 function initialCoach() {
   if (isOnline()) return {
     title: '与好友，一起切磋。', kicker: `好友对弈 · 你执${sideName(playerSide())}`,
@@ -252,7 +317,7 @@ function currentCoach() {
   if (session.outcome) return {
     title: session.outcome.title, kicker: '这一局 · 有所收获',
     rule: session.outcome.message,
-    effect: isOnline() ? '可以返回电脑对弈，或重新创建邀请，和好友再来一局。' : session.outcome.reason === 'stalemate' ? '中国象棋中，没有任何合法走法的一方也会输，这叫“困毙”。' : '你可以悔棋看看另一种走法，也可以重新开始，把刚学会的规则再练一遍。',
+    effect: isOnline() ? '点击“再来一局”邀请对方继续，对方同意后双方一起开始新一局。' : session.outcome.reason === 'stalemate' ? '中国象棋中，没有任何合法走法的一方也会输，这叫“困毙”。' : '你可以悔棋看看另一种走法，也可以重新开始，把刚学会的规则再练一遍。',
   };
   if (!session.teaching) return {
     title: '专心下棋，随时求助。', kicker: '自由对弈 · 教学已关闭',
@@ -305,6 +370,11 @@ function renderBoard() {
   const lastDescription = lastRecord ? `上一步：${sideName(lastRecord.before.turn)}${lastRecord.notation}` : '';
   if ($('last-move-description').textContent !== lastDescription) $('last-move-description').textContent = lastDescription;
   $('last-move-description').hidden = !lastRecord;
+  const capture = describeCapture(lastRecord, playerSide());
+  const captureMessage = capture?.message ?? '';
+  if ($('capture-message').textContent !== captureMessage) $('capture-message').textContent = captureMessage;
+  $('capture-notice').hidden = !capture;
+  $('capture-notice').dataset.kind = capture?.kind ?? '';
   updateTabStops();
   const overlay = $('board-overlay'); overlay.replaceChildren();
   if (hint) {
@@ -411,19 +481,19 @@ function renderOnlineControls() {
   $('ready-button').textContent = ended ? '对局已结束' : !waiting ? '对局进行中' : player?.ready ? '取消准备' : '准备开始';
   $('ready-button').disabled = !room || !waiting || onlineBusy || !!onlineError;
   $('leave-room').disabled = onlineBusy;
-  $('primary-action').disabled = true;
-  $('primary-label').textContent = '好友对弈中';
+  $('primary-action').disabled = !ended || !session.outcome || onlineBusy;
+  $('primary-label').textContent = ended ? room?.rematch?.requestedBy === playerSide() ? '查看邀请进度' : room?.rematch ? '查看再来一局邀请' : '再来一局' : '好友对弈中';
   $('undo-button').disabled = true;
   $('restart-button').disabled = true;
   $('level-tag').textContent = sideName(playerSide() === 'red' ? 'black' : 'red');
   $('status-title').textContent = title;
-  $('status-description').textContent = ended ? session.outcome?.message || '可以返回电脑对弈，或重新创建邀请。' : waiting ? '创建者执红，受邀者执黑；双方准备后红方先走，己方始终在下。' : !connected ? '连接恢复后自动继续，本局盘面会保留。' : `你执${sideName(playerSide())}，己方在下、对方在上。`;
+  $('status-description').textContent = ended ? room?.rematch ? room.rematch.requestedBy === playerSide() ? '已邀请对方再来一局，等待对方同意。' : '对方邀请您再来一局，可以选择继续对弈或退出。' : '本局已结束，可以邀请对方再来一局，或退出对弈。' : waiting ? '创建者执红，受邀者执黑；双方准备后红方先走，己方始终在下。' : !connected ? '连接恢复后自动继续，本局盘面会保留。' : `你执${sideName(playerSide())}，己方在下、对方在上。`;
   $('human-caption').textContent = `你执${sideName(playerSide())} · 己方视角（下方）`;
   $('control-footnote').textContent = '联机对局按双方轮次进行，走法由服务器校验。';
 }
 
 function renderHistory() {
-  const key = `${revision}/${session.records.length}`;
+  const key = `${revision}/${session.records.length}/${playerSide()}`;
   if (key === historyRenderKey) return;
   historyRenderKey = key;
   $('history-count').textContent = `${session.records.length} 步`;
@@ -436,14 +506,16 @@ function renderHistory() {
     const head = document.createElement('div'); head.className = 'history-head';
     const number = document.createElement('span'); number.className = 'history-number'; number.textContent = String(index + 1).padStart(2, '0');
     const dot = document.createElement('span'); dot.className = `history-side ${record.before.turn}`;
-    const label = document.createElement('span'); label.textContent = record.notation ?? `${sideName(record.before.turn)} ${squareName(record.move.from)} → ${squareName(record.move.to)}`;
+    const label = document.createElement('span');
+    const capture = describeCapture(record, playerSide());
+    label.textContent = `${record.notation ?? `${sideName(record.before.turn)} ${squareName(record.move.from)} → ${squareName(record.move.to)}`}${capture ? ` · ${capture.message}` : ''}`;
     head.append(number, dot, label); item.append(head);
     const effect = document.createElement('p'); effect.className = 'history-effect'; effect.textContent = `${record.explanation.rule} ${record.explanation.effect ?? ''}`; item.append(effect);
     $('history-list').append(item);
   });
 }
 
-function render() { renderBoard(); renderCoach(); renderControls(); renderHistory(); }
+function render() { renderBoard(); renderCoach(); renderControls(); renderHistory(); renderEndgameDialog(); }
 
 function onSquare(index) {
   if (!canPlay() || task?.kind === 'ai') return;
@@ -536,7 +608,8 @@ function restart() {
 }
 
 function askRestart() {
-  if (!session.records.length) { restart(); return; }
+  if (isOnline()) return;
+  if (session.outcome || !session.records.length) { restart(); return; }
   $('restart-dialog').returnValue = 'cancel';
   $('restart-dialog').showModal();
 }
@@ -560,7 +633,11 @@ function populateRules() {
 }
 
 $('primary-action').addEventListener('click', () => {
-  if (session.outcome) askRestart();
+  if (session.outcome) {
+    if (isOnline()) renderEndgameDialog(true);
+    else restart();
+  }
+  else if (isOnline()) return;
   else if (session.position.turn === 'black') void requestComputerMove();
   else void requestHint();
 });
@@ -569,7 +646,23 @@ $('undo-button').addEventListener('click', () => {
   cancelTask(); session = undoRound(session); clearSelection(); showNotice(''); persist(); render();
 });
 $('restart-button').addEventListener('click', askRestart);
-$('restart-dialog').addEventListener('close', () => { if ($('restart-dialog').returnValue === 'restart') restart(); });
+$('restart-dialog').addEventListener('close', () => {
+  if ($('restart-dialog').returnValue === 'restart') restart();
+  else renderEndgameDialog();
+});
+$('feedback-dialog').addEventListener('close', () => renderEndgameDialog());
+$('endgame-primary').addEventListener('click', () => void respondToEndgame());
+$('endgame-exit').addEventListener('click', () => {
+  if (onlineBusy) return;
+  if (isOnline()) { void leaveOnline(); return; }
+  dismissedEndgameKey = endgameKey;
+  $('endgame-dialog').close();
+  showNotice('已退出本局，可选择“再来一局”或邀请好友对弈。');
+});
+$('endgame-dialog').addEventListener('cancel', event => {
+  if (onlineBusy) event.preventDefault();
+  else dismissedEndgameKey = endgameKey;
+});
 $('room-entry-dialog').addEventListener('close', () => {
   if ($('room-entry-dialog').returnValue === 'invite') void enterOnline();
 });
@@ -589,15 +682,7 @@ for (const eventName of ['pointerdown', 'pointerup', 'touchend', 'keydown', 'cli
 $('invite-button').addEventListener('click', () => void enterOnline());
 $('copy-invite').addEventListener('click', () => void copyInvite());
 $('ready-button').addEventListener('click', () => void runOnline(() => onlineClient.ready(!onlineRoom.players[playerSide()].ready)));
-$('leave-room').addEventListener('click', async () => {
-  if (onlineBusy) return;
-  onlineBusy = true; render();
-  await onlineClient.leave();
-  cancelTask(); clearSelection();
-  session = { ...soloSession, teaching: session.teaching, difficulty: session.difficulty };
-  onlineRoom = null; onlineJoining = false; onlineError = ''; onlineBusy = false;
-  showNotice('已返回电脑对弈。'); render();
-});
+$('leave-room').addEventListener('click', () => void leaveOnline());
 window.addEventListener('pagehide', () => { cancelTask(); opponent.dispose(); onlineClient.dispose(); void moveSound.dispose(); });
 window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
 
