@@ -34,13 +34,13 @@
 /* Trace the latest move without covering legal moves or the coach's marks. */
 .board-square.last-from,.board-square.last-to{border-radius:9px;outline-offset:-3px!important}
 .board-square.last-from{
-  background:#63503438;
-  outline:2px dashed #756044;
+  background:#7951320d;
+  outline:2px dashed #89674566;
 }
 .board-square.last-to{
-  background:#edf0ed99;
-  outline:2px solid #b3bab5;
-  box-shadow:inset 0 0 0 5px #ffffff40;
+  background:#fff3aeb3;
+  outline:2px solid #d59b28;
+  box-shadow:inset 0 0 0 3px #fff9d5cc,0 0 14px #ffe48280;
 }
 .board-square.last-move:not(.related):not(.hint-to)::before{content:none}
 .board-square.last-to .piece{
@@ -50,8 +50,8 @@
 .board-square.last-to.selected .piece{box-shadow:0 5px 5px #72522b4b,0 0 0 2px #e7ebe7,inset 0 0 0 1px #b2b9b2,inset 0 0 0 var(--piece-face) #f4f6f1,inset 0 0 0 var(--piece-rim) currentColor}
 .board-square.last-from:focus-visible,.board-square.last-to:focus-visible{outline-color:#365d42;outline-width:3px;outline-offset:-1px!important}
 .legend-from,.legend-to{width:10px;height:10px;display:inline-block;flex:none;border-radius:2px}
-.legend-from{border:1px dashed #756044;background:#63503438}
-.legend-to{border:1px solid #b3bab5;background:#edf0ed;box-shadow:inset 0 0 0 1px #f8faf7}
+.legend-from{border:1px dashed #89674566;background:#7951320d}
+.legend-to{border:1px solid #d59b28;background:#fff3ae;box-shadow:inset 0 0 0 1px #fff9d5,0 0 4px #ffe48280}
 .last-move-description{margin-top:10px;font-size:11px;line-height:1.7;color:#737b68}
 .capture-notice{display:flex;align-items:baseline;gap:9px;margin-top:14px;padding:10px 12px;border:1px solid #ccd9c4;border-radius:7px;background:#eef3e9;color:#3e5d3e;font-size:12px;line-height:1.7}
 .capture-notice strong{font-weight:500;overflow-wrap:anywhere}
@@ -204,11 +204,11 @@ textarea:focus-visible{outline:3px solid #a77b3d;outline-offset:4px}
 }
 .board-square.selected .piece-face{animation:piece-ready 1.7s ease-in-out infinite}
 .board-square.last-to .piece{
-  background:radial-gradient(ellipse at 32% 18%,#fffce9,#f4dfb6 61%,#dfb981);
-  box-shadow:var(--disc-shadow),0 0 0 2px #f9edc7d9;
+  background:radial-gradient(ellipse at 32% 18%,#fffef2,#fff1b9 61%,#efce8a);
+  box-shadow:var(--disc-shadow),0 0 0 2px #ffefab,0 0 16px #ffe482a6;
 }
-.board-square.last-from{background:#79513220;outline-color:#896745;border-radius:6px}
-.board-square.last-to{background:#ffffd44a;outline-color:#e0bc74;border-radius:6px;box-shadow:inset 0 0 0 3px #ffffe141}
+.board-square.last-from{background:#7951320d;outline-color:#89674566;border-radius:6px}
+.board-square.last-to{background:#fff3aeb3;outline-color:#d59b28;border-radius:6px;box-shadow:inset 0 0 0 3px #fff9d5cc,0 0 14px #ffe48280}
 .board-square.in-check .piece{
   outline:3px solid #b83e2f;
   outline-offset:4px;
