@@ -147,6 +147,58 @@ test('static whitelist never exposes credentials, implementation, tests, metadat
   assert.equal(head.data, '');
 });
 
+test('bundled check music serves its real M4A bytes, audio MIME, HEAD and browser byte ranges', async t => {
+  const f = await fixture(t);
+  const expected = await readFile(new URL('../assets/check-march.m4a', import.meta.url));
+  assert.equal(expected.subarray(4, 8).toString(), 'ftyp');
+  const url = f.origin + '/assets/check-march.m4a';
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Content-Type'), 'audio/mp4');
+  assert.equal(response.headers.get('Accept-Ranges'), 'bytes');
+  assert.equal(Number(response.headers.get('Content-Length')), expected.length);
+  assert.equal(Buffer.from(await response.arrayBuffer()).equals(expected), true);
+
+  for (const range of [undefined, 'bytes=0-1']) {
+    const head = await fetch(url, { method: 'HEAD', headers: range ? { Range: range } : {} });
+    assert.equal(head.status, 200);
+    assert.equal(Number(head.headers.get('Content-Length')), expected.length);
+    assert.equal(head.headers.get('Accept-Ranges'), 'bytes');
+    assert.equal((await head.arrayBuffer()).byteLength, 0);
+  }
+
+  for (const [header, start, end] of [
+    ['bytes=0-1', 0, 1],
+    ['bytes=4-31', 4, 31],
+    [`bytes=${expected.length - 20}-`, expected.length - 20, expected.length - 1],
+    ['bytes=-17', expected.length - 17, expected.length - 1],
+    [`bytes=${expected.length - 4}-${expected.length + 100}`, expected.length - 4, expected.length - 1],
+  ]) {
+    const partial = await fetch(url, { headers: { Range: header } });
+    assert.equal(partial.status, 206, header);
+    assert.equal(partial.headers.get('Content-Range'), `bytes ${start}-${end}/${expected.length}`);
+    assert.equal(Number(partial.headers.get('Content-Length')), end - start + 1);
+    assert.equal(Buffer.from(await partial.arrayBuffer()).equals(expected.subarray(start, end + 1)), true);
+  }
+});
+
+test('music ranges reject malformed or unsatisfiable requests without exposing private files', async t => {
+  const f = await fixture(t);
+  const expected = await readFile(new URL('../assets/check-march.m4a', import.meta.url));
+  for (const range of [`bytes=${expected.length}-`, 'bytes=20-10', 'bytes=-0', 'bytes=-', 'bytes=0-1,5-9', 'items=0-1', 'bytes=9007199254740993-']) {
+    const response = await fetch(f.origin + '/assets/check-march.m4a', { headers: { Range: range } });
+    assert.equal(response.status, 416, range);
+    assert.equal(response.headers.get('Content-Range'), `bytes */${expected.length}`);
+    assert.equal(response.headers.get('Content-Length'), '0');
+    assert.equal((await response.arrayBuffer()).byteLength, 0);
+  }
+  for (const path of ['/.data/state.json', '/scripts/server.mjs', '/assets/../.data/state.json']) {
+    const response = await fetch(f.origin + path, { headers: { Range: 'bytes=0-1' } });
+    assert.equal(response.status, 404, path);
+    assert.equal(response.headers.has('Content-Range'), false);
+  }
+});
+
 test('visitors use anonymous cookies, ignore untrusted proxy IPs and heartbeat without inflated visits', async t => {
   const f = await fixture(t);
   const first = f.client();
@@ -651,11 +703,16 @@ test('public directory junctions cannot alias private files, even when their ext
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'private'));
   await writeFile(join(root, 'private', 'secrets.js'), 'a private credential file');
+  await writeFile(join(root, 'private', 'secrets.m4a'), 'a private credential file');
   await symlink(join(root, 'private'), join(root, 'src'), 'junction');
+  await symlink(join(root, 'private'), join(root, 'assets'), 'junction');
   const f = await fixture(t, { root });
   const result = await f.client().request('/src/secrets.js');
   assert.equal(result.status, 404);
   assert.equal(JSON.stringify(result.data).includes('credential'), false);
+  const audio = await f.client().request('/assets/secrets.m4a', { headers: { Range: 'bytes=0-1' } });
+  assert.equal(audio.status, 404);
+  assert.equal(JSON.stringify(audio.data).includes('credential'), false);
 });
 
 test('data and password hash survive restart while sessions and live rooms expire safely', async t => {

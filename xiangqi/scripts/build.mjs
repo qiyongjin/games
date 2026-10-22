@@ -11,6 +11,7 @@ try {
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 for (const name of ['index.html', 'styles.css', 'admin.html', 'admin.css']) await cp(resolve(root, name), resolve(output, name));
+await cp(resolve(root, 'assets'), resolve(output, 'assets'), { recursive: true });
 await mkdir(resolve(output, 'deploy'));
 for (const name of ['install.sh', 'xiangqi.service', 'nginx.http.conf', 'nginx.https.conf', 'README.md']) {
   const content = await readFile(resolve(root, 'deploy', name), 'utf8');

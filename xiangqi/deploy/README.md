@@ -8,7 +8,7 @@
 
 ## 2. 安装应用与常驻服务
 
-构建包根目录包含 `scripts/`、`src/`、`index.html` 和本 `deploy/` 目录。应用最终安装在 `/opt/xiangqi`，数据始终存入 `/var/lib/xiangqi`，更新代码时不覆盖此数据目录。
+构建包根目录包含 `scripts/`、`src/`、`assets/`、`index.html` 和本 `deploy/` 目录；`assets/check-march.m4a` 为内置将军配乐，上传或更新时应一并保留。应用最终安装在 `/opt/xiangqi`，数据始终存入 `/var/lib/xiangqi`，更新代码时不覆盖此数据目录。
 
 对于已确认使用 `/usr/sbin/nginx -c /etc/nginx/nginx.conf`、加载 `/etc/nginx/conf.d/*.conf` 的这台服务器，先在独立上传目录（如 `~/xiangqi-upload`）解压部署包，再执行 `sudo bash ~/xiangqi-upload/deploy/install.sh`。不要提前创建 `/opt/xiangqi`；脚本会创建该目录，完成应用、低权限用户、常驻服务、ACME 目录和独立 HTTP 站点的首次安装。遇到已有同名目录、服务、用户、用户组、站点或端口占用时停止，不覆盖已有安装。它不申请证书，也不修改已有网站与防火墙。
 

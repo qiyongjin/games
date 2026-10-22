@@ -17,12 +17,24 @@ const COOKIE_VISITOR = 'yibu_visitor';
 const token = () => randomBytes(32).toString('base64url');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const safeId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{8,100}$/.test(value);
-const publicTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
+const publicTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.m4a': 'audio/mp4' };
 
 class RequestError extends Error {
   constructor(status, message, code) { super(message); this.status = status; this.code = code; }
 }
 const fail = (status, message, code) => { throw new RequestError(status, message, code); };
+function byteRange(header, size) {
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
+  if (!match || !size || !match[1] && !match[2]) return null;
+  if (!match[1]) {
+    const suffix = Number(match[2]);
+    return Number.isSafeInteger(suffix) && suffix > 0 ? { start: Math.max(0, size - suffix), end: size - 1 } : null;
+  }
+  const start = Number(match[1]);
+  const end = match[2] ? Number(match[2]) : size - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= size || end < start) return null;
+  return { start, end: Math.min(end, size - 1) };
+}
 function normalizeIP(value) {
   let ip = String(value || '').trim();
   if (ip.startsWith('::ffff:') && isIP(ip.slice(7)) === 4) ip = ip.slice(7);
@@ -260,15 +272,36 @@ export async function createXiangqiServer(options = {}) {
   async function serveStatic(request, response, pathname) {
     if (!['GET', 'HEAD'].includes(request.method)) fail(405, '此地址不支持该操作。');
     const publicPath = pathname === '/' ? '/index.html' : pathname === '/admin' ? '/admin.html' : pathname;
-    if (!/^\/(?:index\.html|styles\.css|admin\.html|admin\.css|src\/[A-Za-z0-9_-]+\.js|assets\/[A-Za-z0-9_-]+\.(?:svg|png|webp|jpg))$/.test(publicPath)) fail(404, '文件不存在。');
+    if (!/^\/(?:index\.html|styles\.css|admin\.html|admin\.css|src\/[A-Za-z0-9_-]+\.js|assets\/[A-Za-z0-9_-]+\.(?:svg|png|webp|jpg|m4a))$/.test(publicPath)) fail(404, '文件不存在。');
     const file = resolve(root, `.${publicPath}`);
     let actual;
     try { actual = await realpath(file); } catch { fail(404, '文件不存在。'); }
     // Even a symlink inside the public tree must not alias a private server/data file.
-    if (actual !== file || !actual.startsWith(root + sep) || !(await stat(actual)).isFile()) fail(404, '文件不存在。');
+    if (actual !== file || !actual.startsWith(root + sep)) fail(404, '文件不存在。');
+    const info = await stat(actual);
+    if (!info.isFile()) fail(404, '文件不存在。');
+    const headers = { 'Content-Type': publicTypes[extname(actual)] || 'application/octet-stream', 'Content-Length': info.size };
+    if (extname(actual) === '.m4a') {
+      headers['Accept-Ranges'] = 'bytes';
+      // Safari probes M4A byte ranges before decoding. Only the same public
+      // whitelist and realpath-checked files may be read, including for ranges.
+      if (request.method === 'GET' && request.headers.range) {
+        const range = byteRange(request.headers.range, info.size);
+        if (!range) {
+          response.writeHead(416, { ...headers, 'Content-Length': 0, 'Content-Range': `bytes */${info.size}` });
+          response.end();
+          return;
+        }
+        const data = await readFile(actual);
+        response.writeHead(206, { ...headers, 'Content-Length': range.end - range.start + 1, 'Content-Range': `bytes ${range.start}-${range.end}/${info.size}` });
+        response.end(data.subarray(range.start, range.end + 1));
+        return;
+      }
+    }
+    if (request.method === 'HEAD') { response.writeHead(200, headers); response.end(); return; }
     const data = await readFile(actual);
-    response.writeHead(200, { 'Content-Type': publicTypes[extname(actual)] || 'application/octet-stream', 'Content-Length': data.length });
-    response.end(request.method === 'HEAD' ? undefined : data);
+    response.writeHead(200, { ...headers, 'Content-Length': data.length });
+    response.end(data);
   }
   async function handle(request, response) {
     response.setHeader('Cache-Control', 'no-store');

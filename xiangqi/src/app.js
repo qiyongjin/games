@@ -16,6 +16,9 @@ const $ = id => document.getElementById(id);
 const sideName = side => side === 'red' ? '红方' : '黑方';
 const squareName = index => `${String.fromCharCode(65 + index % 9)}${Math.floor(index / 9) + 1}`;
 const svgNS = 'http://www.w3.org/2000/svg';
+const BUILT_IN_MUSIC = '/assets/check-march.m4a';
+const MUSIC_NAME = '关中王进行曲';
+const BUILT_IN_MUSIC_STATUS = '已内置《关中王进行曲》。将军时播放，解除将军后约 1.5 秒渐弱停止。';
 const opponent = createLocalOpponent();
 const moveSound = createMoveSound();
 const battleAudio = createBattleAudio({ onStatus: handleAudioStatus });
@@ -56,6 +59,8 @@ let endgameError = '';
 let battleNoticeTimer = null;
 let musicPreviewing = false;
 let musicOperation = 0;
+let customMusicSelected = false;
+let checkMusicActive = false;
 const squareButtons = [];
 const squareRows = [];
 const boardFileLabels = { top: [], bottom: [] };
@@ -253,9 +258,16 @@ const moveStyleNames = { rook: '车 · 长驱直入', horse: '马 · 踏风跃�
 
 function handleBattleAnnouncement({ kind, text, type, side }) {
   $('move-style-label').textContent = moveStyleNames[type] ?? '一步一势，各显神通';
+  const lastRecord = session.records.at(-1);
+  if (checkMusicActive && lastRecord && inCheck(lastRecord.before) && !inCheck(lastRecord.after)) {
+    musicOperation += 1;
+    checkMusicActive = false;
+    musicPreviewing = false;
+    void battleAudio.fadeOut({ duration: 1500 });
+    renderMusicControls();
+  }
   if (kind === 'move') return;
   const banner = $('battle-announcement');
-  const lastRecord = session.records.at(-1);
   const captured = !!lastRecord?.before.board[lastRecord.move.to];
   $('battle-kicker').textContent = `${sideName(side)} · ${kind === 'check' ? '锋芒毕露' : '吃子得手'}`;
   $('battle-title').textContent = text;
@@ -277,7 +289,9 @@ function handleBattleAnnouncement({ kind, text, type, side }) {
   }
   if (kind === 'check') {
     const operation = ++musicOperation;
-    void battleAudio.check().then(played => {
+    checkMusicActive = true;
+    musicPreviewing = false;
+    void battleAudio.check({ loop: true }).then(played => {
       if (operation === musicOperation && !played && battleAudio.musicReady && moveSound.enabled) $('check-music-status').textContent = '配乐暂未播放，点击“试听配乐”开启声音或重新选择音频。';
     });
   }
@@ -287,6 +301,7 @@ function resetMoveFeedback() {
   musicOperation += 1;
   moveEffects.reset();
   battleAudio.stop();
+  checkMusicActive = false;
   musicPreviewing = false;
   clearTimeout(battleNoticeTimer);
   $('battle-announcement').hidden = true;
@@ -305,7 +320,18 @@ function playCommittedMove() {
 function renderMusicControls() {
   $('music-preview').disabled = !battleAudio.musicReady || !moveSound.enabled;
   $('music-preview').textContent = musicPreviewing ? '停止试听' : '试听配乐';
-  $('music-clear').hidden = !battleAudio.musicReady;
+  $('music-clear').hidden = !customMusicSelected;
+}
+
+function useBuiltInMusic() {
+  musicOperation += 1;
+  musicPreviewing = false;
+  checkMusicActive = false;
+  customMusicSelected = false;
+  battleAudio.setMusicSource(BUILT_IN_MUSIC, { name: MUSIC_NAME });
+  $('check-music-file').value = '';
+  $('check-music-status').textContent = BUILT_IN_MUSIC_STATUS;
+  renderMusicControls();
 }
 
 function handleAudioStatus({ state, message }) {
@@ -313,10 +339,15 @@ function handleAudioStatus({ state, message }) {
     $('speech-status').textContent = message;
     $('speech-status').hidden = false;
   }
-  if (['ended', 'error', 'blocked', 'unsupported'].includes(state)) {
+  if (state === 'fading') $('check-music-status').textContent = '已解除将军，配乐正在渐弱…';
+  if (['ended', 'error', 'blocked', 'unsupported', 'faded'].includes(state)) {
     musicOperation += 1;
     musicPreviewing = false;
+    checkMusicActive = false;
     if (message) $('check-music-status').textContent = message;
+    else $('check-music-status').textContent = customMusicSelected
+      ? `已选择「${battleAudio.musicName}」。将军时播放，解除将军后约 1.5 秒渐弱停止。`
+      : BUILT_IN_MUSIC_STATUS;
     renderMusicControls();
   }
 }
@@ -762,7 +793,7 @@ $('sound-toggle').addEventListener('click', () => {
   moveSound.setEnabled(!moveSound.enabled);
   battleAudio.setEnabled(moveSound.enabled);
   if (moveSound.enabled) { void moveSound.unlock({ preview: true }); void battleAudio.unlock(); }
-  else musicPreviewing = false;
+  else { musicPreviewing = false; checkMusicActive = false; }
   try { localStorage.setItem('xiangqi-move-sound:v1', moveSound.enabled ? 'on' : 'off'); } catch { /* The preference is optional. */ }
   renderControls();
 });
@@ -784,19 +815,17 @@ $('check-music-file').addEventListener('change', event => {
   }
   musicOperation += 1;
   musicPreviewing = false;
-  $('check-music-status').textContent = `已选择「${file.name}」。可先试听，每次将军时自动播放。`;
+  checkMusicActive = false;
+  customMusicSelected = true;
+  $('check-music-status').textContent = `已选择「${file.name}」。将军时播放，解除将军后约 1.5 秒渐弱停止。`;
   renderMusicControls();
 });
 $('music-clear').addEventListener('click', () => {
-  musicOperation += 1;
-  battleAudio.setMusicFile(null);
-  musicPreviewing = false;
-  $('check-music-file').value = '';
-  $('check-music-status').textContent = '选择《关中王进行曲》音频后，每次将军自动播放。配乐仅在本次打开时使用。';
-  renderMusicControls();
+  useBuiltInMusic();
 });
 $('music-preview').addEventListener('click', async () => {
   const operation = ++musicOperation;
+  checkMusicActive = false;
   if (musicPreviewing) { battleAudio.stop(); musicPreviewing = false; renderMusicControls(); return; }
   musicPreviewing = true;
   renderMusicControls();
@@ -815,6 +844,7 @@ $('leave-room').addEventListener('click', () => void leaveOnline());
 window.addEventListener('pagehide', () => { cancelTask(); moveEffects.dispose(); battleAudio.dispose(); opponent.dispose(); onlineClient.dispose(); clearTimeout(battleNoticeTimer); void moveSound.dispose(); });
 window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
 
+useBuiltInMusic();
 drawBoard(); populateRules(); initializeFloatingRules(); initializeFeedback(); render();
 visitReady = initializeVisitTracking();
 if (restored.notice) showNotice(restored.notice);

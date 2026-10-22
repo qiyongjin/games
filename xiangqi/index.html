@@ -36,13 +36,13 @@
         <p id="last-move-description" class="last-move-description" role="status" aria-live="polite" hidden></p>
         <details class="battle-settings">
           <summary>对局声效 <span>吃子有狠话，将军有排面</span></summary>
-          <p class="battle-sound-description">吃子语音「哥们，菜你就多练」。将军时，播放你选的《关中王进行曲》。</p>
+          <p class="battle-sound-description">吃子语音「哥们，菜你就多练」。将军自带《关中王进行曲》，解除将军后音乐渐弱退场。</p>
           <div class="music-controls">
-            <label for="check-music-file" class="music-file-label">选择将军配乐<input id="check-music-file" class="visually-hidden" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"></label>
+            <label for="check-music-file" class="music-file-label">更换配乐<input id="check-music-file" class="visually-hidden" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"></label>
             <button type="button" id="music-preview" class="sound-toggle" disabled>试听配乐</button>
-            <button type="button" id="music-clear" class="text-button" hidden>移除</button>
+            <button type="button" id="music-clear" class="text-button" hidden>恢复内置配乐</button>
           </div>
-          <p id="check-music-status" class="music-status" role="status">选择《关中王进行曲》音频后，每次将军自动播放。配乐仅在本次打开时使用。</p>
+          <p id="check-music-status" class="music-status" role="status">已内置《关中王进行曲》。将军时播放，解除将军后约 1.5 秒渐弱停止。</p>
           <p id="speech-status" class="music-status" hidden>当前浏览器未提供中文语音，吃子时仍会显示嘲讽台词。</p>
         </details>
       </section>

@@ -55,7 +55,7 @@ printf '安装应用到 %s\n' "$APP_TARGET"
 useradd --system --user-group --home-dir /var/lib/xiangqi --shell /sbin/nologin xiangqi
 install -d -m 0755 "$APP_TARGET"
 for name in index.html styles.css admin.html admin.css package.json; do install -m 0644 "$APP_SOURCE/$name" "$APP_TARGET/$name"; done
-for directory in src scripts deploy; do cp -R -- "$APP_SOURCE/$directory" "$APP_TARGET/"; done
+for directory in src scripts deploy assets; do cp -R -- "$APP_SOURCE/$directory" "$APP_TARGET/"; done
 find "$APP_TARGET" -type d -exec chmod 0755 {} +
 find "$APP_TARGET" -type f -exec chmod 0644 {} +
 install -m 0644 "$APP_TARGET/deploy/xiangqi.service" "$UNIT_TARGET"
