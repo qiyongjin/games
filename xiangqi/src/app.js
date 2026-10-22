@@ -50,6 +50,9 @@ let task = null;
 let revision = 0;
 let coachView = null;
 let failedAI = false;
+let autoComputerMove = true;
+let autoMoveQueued = false;
+let pageActive = true;
 let storageWarned = false;
 let keyboardSquare = 87;
 let historyRenderKey = '';
@@ -423,7 +426,7 @@ function initialCoach() {
   return {
     title: '每一步，都有门道。', kicker: '第一课 · 认识棋子',
     rule: '点击一枚红棋，看看它的走法。棋盘上的小圆点，就是它可以去的地方。',
-    effect: '棋子放在线的交叉点上。你执红先走，走完后点击“下一步”，电脑才会落子。',
+    effect: autoComputerMove ? '棋子放在线的交叉点上。你执红先走，走完后电脑会自动应手。' : '棋子放在线的交叉点上。你执红先走，走完后点击“下一步”让电脑落子。',
     detail: '每次只移动一枚棋子，红黑双方轮流走。走到对方棋子的位置就能吃掉它，但不能吃自己的棋子。箭头键可以在棋盘上移动焦点，回车键选子或落子。',
   };
 }
@@ -437,7 +440,7 @@ function currentCoach() {
   };
   if (!session.teaching) return {
     title: '专心下棋，随时求助。', kicker: '自由对弈 · 教学已关闭',
-    rule: isOnline() ? '等待双方按顺序落子，选中自己的棋子仍能查看合法走法。' : '轮到电脑时，点击“下一步”让它落子。选中棋子仍能查看走法，需要时可以点击“给我一点提示”。',
+    rule: isOnline() ? '等待双方按顺序落子，选中自己的棋子仍能查看合法走法。' : autoComputerMove ? '电脑会自动应手。选中棋子可查看走法，需要时可以点击“提示”。' : '轮到电脑时，点击“下一步”让它落子。选中棋子仍能查看走法，需要时可以点击“提示”。',
     effect: '想了解每一步的规则与思路，随时打开右上方的教学开关。',
   };
   const last = session.records.at(-1);
@@ -520,7 +523,7 @@ function renderCoach() {
   document.querySelector('.coach-card').classList.toggle('error', view.tone === 'error');
   document.querySelector('.coach-card').classList.toggle('finished', !!session.outcome);
   document.querySelector('.coach-card').classList.toggle('teaching-off', !session.teaching);
-  $('coach-footer-text').textContent = isOnline() ? '红黑双方轮流落子；双方在线时才能继续对局。' : '轮到电脑时点击“下一步”让它落子；走棋记录中可以回看讲解。';
+  $('coach-footer-text').textContent = isOnline() ? '红黑双方轮流落子；双方在线时才能继续对局。' : autoComputerMove ? '电脑自动应手；走棋记录中可以回看讲解。' : '轮到电脑时点击“下一步”让它落子；走棋记录中可以回看讲解。';
 }
 
 function renderControls() {
@@ -533,7 +536,7 @@ function renderControls() {
   $('level-tag').textContent = session.difficulty === 'normal' ? '普通' : '入门';
   const turnBadge = $('turn-badge');
   turnBadge.classList.toggle('thinking', !!task); turnBadge.classList.toggle('finished', finished);
-  turnBadge.textContent = finished ? (session.outcome.winner ? sideName(session.outcome.winner) + '胜' : '教学和棋') : task?.kind === 'ai' ? '电脑思考中' : task ? '正在找提示' : blackTurn ? '点击下一步，电脑落子' : checked ? '红方被将军' : '轮到红方';
+  turnBadge.textContent = finished ? (session.outcome.winner ? sideName(session.outcome.winner) + '胜' : '教学和棋') : task?.kind === 'ai' ? '电脑思考中' : task ? '正在找提示' : blackTurn ? autoComputerMove && !failedAI ? '电脑即将自动落子' : '点击下一步，电脑落子' : checked ? '红方被将军' : '轮到红方';
   $('move-counter').textContent = `第 ${Math.floor(session.records.length / 2) + 1} 回合`;
   $('human-caption').textContent = finished ? '每一局，都是一次练习' : checked && !blackTurn ? '先保护好你的帅' : '不急，想好了再落子';
   $('undo-button').disabled = session.records.length === 0;
@@ -545,7 +548,7 @@ function renderControls() {
   } else if (task) {
     title = task.kind === 'ai' ? '电脑正在想一想' : '帮你找一个方向'; description = '棋盘会等一等，你仍然可以悔棋或重新开始。'; primary = task.kind === 'ai' ? '电脑思考中…' : '正在寻找提示…'; footnote = '每一步都经过同样的规则检查。';
   } else if (blackTurn) {
-    title = failedAI ? '再让电脑试一次' : '轮到电脑落子'; description = failedAI ? '刚才的计算没有完成，棋盘已保留。' : '可以先看清刚才的走法，再点击“下一步”让电脑走一步。'; primary = failedAI ? '重试电脑落子' : '下一步 · 电脑落子'; footnote = '电脑会等待你点击，刷新页面后也可以继续。';
+    title = failedAI ? '再让电脑试一次' : '轮到电脑落子'; description = failedAI ? '刚才的计算没有完成，棋盘已保留。' : autoComputerMove ? '电脑会在你的走子动画结束后自动应手。' : '点击“下一步”让电脑走一步。'; primary = failedAI ? '重试电脑落子' : '下一步 · 电脑落子'; footnote = autoComputerMove ? '可随时使用“自动”开关切换应手方式。' : '电脑会等待你点击“下一步”。';
   } else {
     title = checked ? '你的帅被将军了' : '轮到你落子'; description = checked ? '这一步需要解除威胁，合法落点已经为你筛选。' : hint ? '箭头标出了一个建议，试着想想它的作用。' : '选一枚红棋，探索它能走到哪里。'; primary = hint ? '换个角度看看提示' : '给我一点提示'; footnote = '提示只给方向，每一步仍由你决定。';
   }
@@ -574,6 +577,14 @@ function renderControls() {
   $('sound-toggle').setAttribute('aria-pressed', String(moveSound.enabled));
   $('sound-toggle').title = moveSound.enabled ? '关闭落子声、吃子语音和将军配乐' : '开启对局声音并试听落子声';
   if (isOnline()) renderOnlineControls();
+  $('auto-play-toggle').disabled = isOnline();
+  $('auto-play-toggle').setAttribute('aria-pressed', String(autoComputerMove));
+  $('auto-play-toggle').title = isOnline() ? '好友对弈由双方轮流落子' : autoComputerMove ? '关闭后可点击下一步让电脑落子' : '开启后电脑会自动应手';
+  $('auto-play-state').textContent = autoComputerMove ? '开' : '关';
+  $('primary-action').setAttribute('aria-label', $('primary-label').textContent);
+  $('primary-label-compact').textContent = isOnline()
+    ? onlineRoom?.phase === 'finished' ? '再来一局' : '好友对弈'
+    : finished ? '再来一局' : task?.kind === 'ai' ? '思考中' : task ? '找提示…' : blackTurn ? failedAI ? '重试落子' : '电脑落子' : '提示';
   renderMusicControls();
   if (moveEffects.busy) $('primary-action').disabled = true;
 }
@@ -637,6 +648,22 @@ function renderHistory() {
 function render({ deferEndgame = false } = {}) {
   renderBoard(); renderCoach(); renderControls(); renderHistory();
   if (!deferEndgame) renderEndgameDialog();
+  scheduleAutomaticMove();
+}
+
+function canAutomaticallyMove() {
+  return pageActive && autoComputerMove && !isOnline() && !task && !moveEffects.busy
+    && !session.outcome && session.position.turn === 'black' && !failedAI
+    && !document.querySelector('dialog[open]');
+}
+
+function scheduleAutomaticMove() {
+  if (autoMoveQueued || !canAutomaticallyMove()) return;
+  autoMoveQueued = true;
+  queueMicrotask(() => {
+    autoMoveQueued = false;
+    if (canAutomaticallyMove()) void requestComputerMove({ automatic: true });
+  });
 }
 
 function onSquare(index) {
@@ -679,16 +706,18 @@ function onSquare(index) {
   clearSelection(); persist(); render({ deferEndgame: true }); playCommittedMove();
 }
 
-async function requestComputerMove() {
-  if (isOnline() || task || moveEffects.busy || session.outcome || session.position.turn !== 'black') return;
+async function requestComputerMove({ automatic = false } = {}) {
+  if (!pageActive || isOnline() || task || moveEffects.busy || session.outcome || session.position.turn !== 'black') return;
+  if (automatic && !canAutomaticallyMove()) return;
   failedAI = false;
   const controller = new AbortController();
   const key = getPositionKey(session.position), token = revision;
-  const running = { kind: 'ai', controller }; task = running;
+  const running = { kind: 'ai', controller, automatic }; task = running;
   render();
   try {
     const move = await opponent.requestMove(session.position, { difficulty: session.difficulty, signal: controller.signal, entries: session.entries });
     if (task !== running || controller.signal.aborted || token !== revision || key !== getPositionKey(session.position)) return;
+    if (automatic && (!autoComputerMove || document.querySelector('dialog[open]'))) { task = null; render(); return; }
     if (!move || !validateMove(session.position, move).ok) throw new Error('电脑未能返回可用的走法，请重试。');
     task = null; session = commitMove(session, move); clearSelection(); showNotice(''); persist(); render({ deferEndgame: true }); playCommittedMove();
   } catch (error) {
@@ -791,6 +820,14 @@ $('teaching-toggle').addEventListener('change', event => {
   session = { ...session, teaching: event.target.checked }; coachView = null; related = []; persist(); render();
 });
 $('difficulty').addEventListener('change', event => { session = { ...session, difficulty: event.target.value }; persist(); renderControls(); });
+$('auto-play-toggle').addEventListener('click', () => {
+  if (isOnline()) return;
+  autoComputerMove = !autoComputerMove;
+  if (!autoComputerMove && task?.kind === 'ai' && task.automatic) cancelTask();
+  if (autoComputerMove) failedAI = false;
+  coachRenderKey = '';
+  render();
+});
 $('sound-toggle').addEventListener('click', () => {
   musicOperation += 1;
   moveSound.setEnabled(!moveSound.enabled);
@@ -843,7 +880,8 @@ $('invite-button').addEventListener('click', () => void enterOnline());
 $('copy-invite').addEventListener('click', () => void copyInvite());
 $('ready-button').addEventListener('click', () => void runOnline(() => onlineClient.ready(!onlineRoom.players[playerSide()].ready)));
 $('leave-room').addEventListener('click', () => void leaveOnline());
-window.addEventListener('pagehide', () => { cancelTask(); moveEffects.dispose(); battleAudio.dispose(); opponent.dispose(); onlineClient.dispose(); clearTimeout(battleNoticeTimer); void moveSound.dispose(); });
+for (const dialog of document.querySelectorAll('dialog')) dialog.addEventListener('close', scheduleAutomaticMove);
+window.addEventListener('pagehide', () => { pageActive = false; cancelTask(); moveEffects.dispose(); battleAudio.dispose(); opponent.dispose(); onlineClient.dispose(); clearTimeout(battleNoticeTimer); void moveSound.dispose(); });
 window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
 
 useBuiltInMusic();

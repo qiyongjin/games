@@ -305,3 +305,40 @@ textarea:focus-visible{outline:3px solid #a77b3d;outline-offset:4px}
   .battle-announcement[data-kind="check"] strong{font-size:30px}
 }
 @media(prefers-reduced-motion:reduce){.battle-announcement{animation:none!important}}
+
+.primary-label-compact,.auto-play-short{display:none}
+.auto-play-toggle{
+  display:flex;align-items:center;justify-content:center;width:100%;min-height:38px;
+  margin-top:10px;padding:7px 12px;border:1px solid #cbd8bd;border-radius:7px;
+  background:#edf3e5;color:#49633e;font:inherit;font-size:12px;line-height:1.4;
+}
+.auto-play-toggle:hover{background:#e2ecd8}
+.auto-play-toggle[aria-pressed="false"]{background:#f8f8f1;color:#737b68;border-color:#dde1d2}
+.auto-play-toggle:disabled{opacity:.45;cursor:default}
+
+@media(max-width:740px),(max-width:950px) and (max-height:500px){
+  :root{--mobile-action-space:calc(76px + env(safe-area-inset-bottom,0px))}
+  html{scroll-padding-bottom:calc(var(--mobile-action-space) + 12px)}
+  body{padding-bottom:var(--mobile-action-space)}
+  .game-actions{
+    position:fixed;left:0;right:0;bottom:0;z-index:1100;
+    display:grid;grid-template-columns:minmax(0,1.2fr) repeat(3,minmax(0,1fr));
+    align-items:stretch;gap:6px;
+    padding:10px max(10px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(10px,env(safe-area-inset-left,0px));
+    border-top:1px solid #d4dcc7;background:#fffdf5f5;
+    box-shadow:0 -5px 24px #263d3024;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  }
+  .game-actions .secondary-actions{display:contents}
+  .game-actions button{
+    min-width:0;min-height:48px;margin:0;padding:6px;
+    font-size:12px;letter-spacing:0;line-height:1.35;touch-action:manipulation;
+  }
+  .game-actions .primary-button{gap:0}
+  .game-actions #primary-label,.game-actions .primary-button>svg,
+  .game-actions .secondary-actions button span,.game-actions .auto-play-full{display:none}
+  .game-actions .primary-label-compact,.game-actions .auto-play-short{display:inline}
+  .game-actions .secondary-actions button{background:#f6f8ed;border-color:#d4ddc7;color:#526747}
+  .game-actions .secondary-actions button:disabled{opacity:.4}
+  .game-actions button:focus-visible{outline-offset:2px}
+  .floating-rules{bottom:calc(var(--mobile-action-space) + 12px)}
+}

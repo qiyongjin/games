@@ -25,13 +25,24 @@ export function initializeFloatingRules() {
   function place(x, y) {
     const width = document.documentElement.clientWidth || window.innerWidth;
     const height = window.innerHeight;
-    const margin = Math.min(12, width / 4, height / 4);
+    let bottom = height;
+    const actions = document.querySelector('.game-actions');
+    if (actions) {
+      const style = window.getComputedStyle(actions);
+      const bounds = actions.getBoundingClientRect();
+      if (style.position === 'fixed' && style.display !== 'none' && style.visibility !== 'hidden'
+          && bounds.width > 0 && bounds.height > 0 && bounds.bottom > 0 && bounds.top < height) {
+        // Include the action bar's safe-area padding by using its actual bounds.
+        bottom = Math.max(0, bounds.top);
+      }
+    }
+    const margin = Math.min(12, width / 4, bottom / 4);
     panel.style.maxWidth = `${width - margin * 2}px`;
-    panel.style.maxHeight = `${Math.min(520, height - margin * 2)}px`;
+    panel.style.maxHeight = `${Math.min(520, bottom - margin * 2)}px`;
     const bounds = panel.getBoundingClientRect();
     position = {
       x: Math.max(margin, Math.min(x, width - bounds.width - margin)),
-      y: Math.max(margin, Math.min(y, height - bounds.height - margin)),
+      y: Math.max(margin, Math.min(y, bottom - bounds.height - margin)),
     };
     panel.style.right = 'auto';
     panel.style.bottom = 'auto';

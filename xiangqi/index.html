@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#294b3c">
   <meta name="description" content="一步一步，学会中国象棋。和电脑下棋，在每次落子中理解规则与思路。">
   <title>弈步 · 在对弈中学会象棋</title>
@@ -64,7 +64,7 @@
             <span class="coach-kicker" id="coach-kicker">第一课 · 认识棋子</span>
             <h2 id="coach-title">每一步，都有门道。</h2>
             <p id="coach-rule" class="coach-rule">点击一枚红棋，看看它的走法。棋盘上的小圆点，就是它可以去的地方。</p>
-            <div id="coach-effect-wrap" class="coach-effect"><span class="effect-label">小提示</span><p id="coach-effect">棋子放在线的交叉点上。你执红先走，走完后点击“下一步”，电脑才会落子。</p></div>
+            <div id="coach-effect-wrap" class="coach-effect"><span class="effect-label">小提示</span><p id="coach-effect">棋子放在线的交叉点上。你执红先走，走完后电脑会自动应手。</p></div>
             <details id="coach-detail" class="coach-detail" hidden><summary>再多了解一点 <svg class="chevron" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M0 0h24v24H0z" fill="none"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m6 10l6 6l6-6"/></svg></summary><p id="coach-detail-text"></p></details>
           </div>
           <div class="coach-footer"><span class="tiny-sparkle">✧</span><span id="coach-footer-text">先懂规则，再慢慢发现下棋的乐趣。</span></div>
@@ -73,8 +73,11 @@
         <section class="controls-card" aria-label="对局控制">
           <div class="control-top"><span class="section-label" id="game-mode-label">人机对弈</span><label class="difficulty-label" for="difficulty">难度 <span class="difficulty-select"><select id="difficulty"><option value="beginner">入门陪练</option><option value="normal">普通对手</option></select><svg class="chevron" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M0 0h24v24H0z" fill="none"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m6 10l6 6l6-6"/></svg></span></label></div>
           <div class="game-status"><span id="status-indicator" class="status-dot"></span><div><strong id="status-title">轮到你落子</strong><p id="status-description">选一枚红棋，探索它能走到哪里。</p></div></div>
-          <button class="primary-button" id="primary-action"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M8.5 14.5C6 12.5 6 8 8.5 6a5.4 5.4 0 017 0c2.5 2 2.5 6.5 0 8.5L15 16H9z"/></svg><span id="primary-label">给我一点提示</span></button>
-          <div class="secondary-actions"><button id="undo-button" disabled><span aria-hidden="true">↶</span> 悔棋</button><button id="restart-button"><span aria-hidden="true">↻</span> 重新开始</button></div>
+          <div class="game-actions" role="group" aria-label="对弈快捷操作">
+            <button class="primary-button" id="primary-action" aria-label="给我一点提示"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M8.5 14.5C6 12.5 6 8 8.5 6a5.4 5.4 0 017 0c2.5 2 2.5 6.5 0 8.5L15 16H9z"/></svg><span id="primary-label">给我一点提示</span><span id="primary-label-compact" class="primary-label-compact" aria-hidden="true">提示</span></button>
+            <div class="secondary-actions"><button id="undo-button" disabled><span aria-hidden="true">↶</span> 悔棋</button><button id="restart-button"><span aria-hidden="true">↻</span> 重新开始</button></div>
+            <button id="auto-play-toggle" class="auto-play-toggle" type="button" aria-label="电脑自动走" aria-pressed="true" title="关闭后可点击下一步让电脑落子"><span class="auto-play-full">电脑自动走：</span><span class="auto-play-short" aria-hidden="true">自动：</span><span id="auto-play-state">开</span></button>
+          </div>
           <p class="control-footnote" id="control-footnote">提示只给方向，每一步仍由你决定。</p>
         </section>
 
