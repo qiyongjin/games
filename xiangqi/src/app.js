@@ -22,7 +22,7 @@ const BUILT_IN_MUSIC_STATUS = '已内置《关中王进行曲》。将军时播�
 const opponent = createLocalOpponent();
 const moveSound = createMoveSound();
 const battleAudio = createBattleAudio({ onStatus: handleAudioStatus });
-try { moveSound.setEnabled(localStorage.getItem('xiangqi-move-sound:v1') !== 'off'); } catch { /* Sound still works without storage. */ }
+moveSound.setEnabled(true);
 battleAudio.setEnabled(moveSound.enabled);
 void moveSound.preload();
 void battleAudio.preload();
@@ -797,7 +797,6 @@ $('sound-toggle').addEventListener('click', () => {
   battleAudio.setEnabled(moveSound.enabled);
   if (moveSound.enabled) { void moveSound.unlock({ preview: true }); void battleAudio.unlock(); }
   else { musicPreviewing = false; checkMusicActive = false; }
-  try { localStorage.setItem('xiangqi-move-sound:v1', moveSound.enabled ? 'on' : 'off'); } catch { /* The preference is optional. */ }
   renderControls();
 });
 for (const eventName of ['pointerdown', 'pointerup', 'touchend', 'keydown', 'click']) document.addEventListener(eventName, event => {
