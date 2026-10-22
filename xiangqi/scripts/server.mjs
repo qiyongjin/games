@@ -276,7 +276,7 @@ export async function createXiangqiServer(options = {}) {
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
     const url = new URL(request.url, 'http://localhost');
     let pathname;
     try { pathname = decodeURIComponent(url.pathname); } catch { fail(400, '网址格式不正确。'); }

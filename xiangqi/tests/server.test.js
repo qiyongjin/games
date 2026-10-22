@@ -136,7 +136,11 @@ test('static whitelist never exposes credentials, implementation, tests, metadat
     assert.equal(result.status, 404, path);
     assert.equal(JSON.stringify(result.data).includes(PASSWORD), false);
   }
-  assert.equal((await client.request('/')).status, 200);
+  const homepage = await client.request('/');
+  assert.equal(homepage.status, 200);
+  assert.match(homepage.headers.get('Content-Security-Policy'), /media-src 'self' blob:;/);
+  assert.equal((await client.request('/src/move-effects.js')).status, 200);
+  assert.equal((await client.request('/src/battle-audio.js')).status, 200);
   assert.equal((await client.request('/src/engine.js')).status, 200);
   const head = await client.request('/styles.css', { method: 'HEAD' });
   assert.equal(head.status, 200);

@@ -21,6 +21,8 @@
     <div class="game-layout">
       <section class="board-section" aria-label="象棋对局">
         <div class="player-row opponent-row"><div class="player-info"><span class="player-avatar black-avatar">将</span><div><strong><span id="opponent-name">电脑陪练</span> <span class="small-tag" id="level-tag">入门</span></strong><span class="player-caption" id="opponent-caption">黑方 · 和你一起练习</span></div></div><span id="turn-badge" class="turn-badge">轮到红方</span></div>
+        <div class="board-stage-label"><span aria-hidden="true">✦</span> 立体棋局 <span id="move-style-label">一步一势，各显神通</span></div>
+        <div id="battle-announcement" class="battle-announcement" role="status" aria-live="polite" aria-atomic="true" hidden><span id="battle-kicker" class="battle-kicker"></span><strong id="battle-title"></strong><span id="battle-detail" class="battle-detail"></span></div>
         <div class="board-frame">
           <div id="board" class="chessboard" role="grid" aria-label="中国象棋棋盘，黑方在上、红方在下" aria-rowcount="10" aria-colcount="9">
             <svg id="board-art" viewBox="0 0 540 600" aria-hidden="true" class="board-art"></svg>
@@ -32,6 +34,17 @@
         <div id="capture-notice" class="capture-notice" role="status" aria-live="polite" aria-atomic="true" hidden><span class="capture-notice-label">吃子</span><strong id="capture-message"></strong></div>
         <div class="board-legend"><span><i class="legend-dot"></i>可以走</span><span><i class="legend-ring"></i>可以吃</span><span><i class="legend-from"></i>走前（暗）</span><span><i class="legend-to"></i>走后（亮）</span><button type="button" id="sound-toggle" class="sound-toggle" aria-pressed="true" title="关闭落子音效">落子音效：开</button><span class="board-tip">点选棋子，再点落点</span></div>
         <p id="last-move-description" class="last-move-description" role="status" aria-live="polite" hidden></p>
+        <details class="battle-settings">
+          <summary>对局声效 <span>吃子有狠话，将军有排面</span></summary>
+          <p class="battle-sound-description">吃子语音「哥们，菜你就多练」。将军时，播放你选的《关中王进行曲》。</p>
+          <div class="music-controls">
+            <label for="check-music-file" class="music-file-label">选择将军配乐<input id="check-music-file" class="visually-hidden" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"></label>
+            <button type="button" id="music-preview" class="sound-toggle" disabled>试听配乐</button>
+            <button type="button" id="music-clear" class="text-button" hidden>移除</button>
+          </div>
+          <p id="check-music-status" class="music-status" role="status">选择《关中王进行曲》音频后，每次将军自动播放。配乐仅在本次打开时使用。</p>
+          <p id="speech-status" class="music-status" hidden>当前浏览器未提供中文语音，吃子时仍会显示嘲讽台词。</p>
+        </details>
       </section>
 
       <aside class="learning-column" aria-label="教学与对局操作">

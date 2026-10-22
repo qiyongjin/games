@@ -9,6 +9,8 @@ import { viewSquare, adjacentSquare, fileLabels } from './board-view.js';
 import { createMoveSound } from './move-sound.js';
 import { describeCapture } from './capture-feedback.js';
 import { getEndgameView } from './endgame.js';
+import { createMoveEffects } from './move-effects.js';
+import { createBattleAudio } from './battle-audio.js';
 
 const $ = id => document.getElementById(id);
 const sideName = side => side === 'red' ? '红方' : '黑方';
@@ -16,7 +18,9 @@ const squareName = index => `${String.fromCharCode(65 + index % 9)}${Math.floor(
 const svgNS = 'http://www.w3.org/2000/svg';
 const opponent = createLocalOpponent();
 const moveSound = createMoveSound();
+const battleAudio = createBattleAudio({ onStatus: handleAudioStatus });
 try { moveSound.setEnabled(localStorage.getItem('xiangqi-move-sound:v1') !== 'off'); } catch { /* Sound still works without storage. */ }
+battleAudio.setEnabled(moveSound.enabled);
 const restored = loadSession();
 let session = restored.session ?? createSession();
 let soloSession = session;
@@ -49,6 +53,9 @@ let endgameView = null;
 let endgameKey = null;
 let dismissedEndgameKey = null;
 let endgameError = '';
+let battleNoticeTimer = null;
+let musicPreviewing = false;
+let musicOperation = 0;
 const squareButtons = [];
 const squareRows = [];
 const boardFileLabels = { top: [], bottom: [] };
@@ -56,13 +63,15 @@ let boardSide = null;
 const isOnline = () => !!onlineRoom || onlineJoining;
 const playerSide = () => onlineRoom?.you ?? 'red';
 const bothOnline = () => onlineRoom?.players.red.online && onlineRoom?.players.black.online;
-const canPlay = () => !session.outcome && !onlineBusy && !onlineJoining && !onlineError
+const canPlay = () => !session.outcome && !onlineBusy && !onlineJoining && !onlineError && !moveEffects.busy
   && session.position.turn === playerSide() && (!onlineRoom || onlineRoom.phase === 'playing' && bothOnline());
+const moveEffects = createMoveEffects({ board: $('board'), squares: squareButtons, getSide: playerSide, announce: handleBattleAnnouncement });
 const onlineClient = createOnlineClient({
   onUpdate(room) {
     const sameRound = onlineRoom?.id === room.id && onlineRoom.round === room.round;
-    const hasNewMove = sameRound && room.moves.length > onlineRoom.moves.length;
+    const hasNewMove = sameRound && room.moves.length === onlineRoom.moves.length + 1;
     const changed = !sameRound || onlineRoom.moves.length !== room.moves.length;
+    if (changed && !hasNewMove) resetMoveFeedback();
     onlineRoom = room; onlineJoining = false; onlineError = '';
     if (changed) {
       cancelTask(); clearSelection();
@@ -71,8 +80,8 @@ const onlineClient = createOnlineClient({
       session = next;
     }
     if (room.outcome) session = { ...session, outcome: room.outcome };
-    render();
-    if (hasNewMove) moveSound.play();
+    render({ deferEndgame: hasNewMove });
+    if (hasNewMove) playCommittedMove();
   },
   onError(error) { onlineError = error.message || '连接中断，正在重连。'; render(); },
 });
@@ -90,7 +99,7 @@ function reportComputerGame() {
 async function enterOnline(id = null) {
   if (onlineBusy) return;
   if (onlineRoom) { await copyInvite(); return; }
-  soloSession = session; cancelTask(); clearSelection();
+  soloSession = session; cancelTask(); clearSelection(); resetMoveFeedback();
   onlineJoining = true; onlineBusy = true; onlineError = ''; showNotice(''); render();
   try { await visitReady; if (id) await onlineClient.join(id); else await onlineClient.create(); }
   catch (error) {
@@ -240,12 +249,85 @@ function showNotice(message, error = false) {
   $('notice').hidden = !message;
 }
 
+const moveStyleNames = { rook: '车 · 长驱直入', horse: '马 · 踏风跃阵', cannon: '炮 · 隔山轰鸣', elephant: '象 · 山河回响', advisor: '士 · 回旋护阵', general: '将 · 王者临阵', soldier: '兵 · 步步为营' };
+
+function handleBattleAnnouncement({ kind, text, type, side }) {
+  $('move-style-label').textContent = moveStyleNames[type] ?? '一步一势，各显神通';
+  if (kind === 'move') return;
+  const banner = $('battle-announcement');
+  const lastRecord = session.records.at(-1);
+  const captured = !!lastRecord?.before.board[lastRecord.move.to];
+  $('battle-kicker').textContent = `${sideName(side)} · ${kind === 'check' ? '锋芒毕露' : '吃子得手'}`;
+  $('battle-title').textContent = text;
+  $('battle-detail').textContent = kind === 'check'
+    ? captured ? '哥们，菜你就多练' : '兵临城下，这一步请接招。'
+    : describeCapture(session.records.at(-1), playerSide())?.message ?? '';
+  banner.dataset.kind = kind;
+  banner.dataset.side = side;
+  banner.hidden = false;
+  for (const animation of banner.getAnimations?.() ?? []) animation.cancel();
+  if (typeof banner.animate === 'function' && !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    banner.animate([{ opacity: 0, transform: 'translate(-50%, 8px) scale(.86)' }, { opacity: 1, transform: 'translate(-50%, 0) scale(1)' }], { duration: 260, easing: 'cubic-bezier(.16,1,.3,1)' });
+  }
+  clearTimeout(battleNoticeTimer);
+  battleNoticeTimer = setTimeout(() => { banner.hidden = true; }, kind === 'check' ? 2800 : 2400);
+  if (kind === 'capture') {
+    const spoken = battleAudio.capture();
+    $('speech-status').hidden = !!spoken || !moveSound.enabled;
+  }
+  if (kind === 'check') {
+    const operation = ++musicOperation;
+    void battleAudio.check().then(played => {
+      if (operation === musicOperation && !played && battleAudio.musicReady && moveSound.enabled) $('check-music-status').textContent = '配乐暂未播放，点击“试听配乐”开启声音或重新选择音频。';
+    });
+  }
+}
+
+function resetMoveFeedback() {
+  musicOperation += 1;
+  moveEffects.reset();
+  battleAudio.stop();
+  musicPreviewing = false;
+  clearTimeout(battleNoticeTimer);
+  $('battle-announcement').hidden = true;
+  $('move-style-label').textContent = '一步一势，各显神通';
+  renderMusicControls();
+}
+
+function playCommittedMove() {
+  const record = session.records.at(-1);
+  if (!record) return;
+  moveSound.play();
+  void moveEffects.play(record, { side: playerSide(), checked: inCheck(record.after, record.after.turn) }).finally(() => render());
+  renderControls();
+}
+
+function renderMusicControls() {
+  $('music-preview').disabled = !battleAudio.musicReady || !moveSound.enabled;
+  $('music-preview').textContent = musicPreviewing ? '停止试听' : '试听配乐';
+  $('music-clear').hidden = !battleAudio.musicReady;
+}
+
+function handleAudioStatus({ state, message }) {
+  if (state === 'speech-unavailable') {
+    $('speech-status').textContent = message;
+    $('speech-status').hidden = false;
+  }
+  if (['ended', 'error', 'blocked', 'unsupported'].includes(state)) {
+    musicOperation += 1;
+    musicPreviewing = false;
+    if (message) $('check-music-status').textContent = message;
+    renderMusicControls();
+  }
+}
+
 function resultKey(view) {
   const game = onlineRoom ? `${onlineRoom.id}/${onlineRoom.round ?? 1}` : gameId;
   return `${game}/${view.kind}/${onlineRoom?.rematch?.requestedBy ?? ''}`;
 }
 
 function renderEndgameDialog(force = false) {
+  if (moveEffects.busy) return;
   const dialog = $('endgame-dialog');
   const view = onlineJoining ? null : getEndgameView({ outcome: session.outcome, room: onlineRoom, side: playerSide() });
   if (!view) {
@@ -288,7 +370,7 @@ async function leaveOnline(inviteAgain = false) {
   if (onlineBusy) return;
   onlineBusy = true; render();
   await onlineClient.leave();
-  cancelTask(); clearSelection();
+  cancelTask(); clearSelection(); resetMoveFeedback();
   session = { ...soloSession, teaching: session.teaching, difficulty: session.difficulty };
   onlineRoom = null; onlineJoining = false; onlineError = ''; onlineBusy = false;
   const previousResult = getEndgameView({ outcome: session.outcome });
@@ -361,7 +443,8 @@ function renderBoard() {
     button.setAttribute('aria-selected', String(selected === index || inspected === index));
     if (piece) {
       if (button.firstChild?.dataset?.id !== piece.id) {
-        const token = document.createElement('span'); token.className = `piece ${piece.side}`; token.dataset.id = piece.id; token.textContent = PIECE_LABELS[piece.side][piece.type];
+        const token = document.createElement('span'); token.className = `piece ${piece.side}`; token.dataset.id = piece.id; token.dataset.type = piece.type; token.dataset.side = piece.side;
+        const face = document.createElement('span'); face.className = 'piece-face'; face.textContent = PIECE_LABELS[piece.side][piece.type]; token.append(face);
         button.replaceChildren(token);
       }
     } else button.replaceChildren();
@@ -421,7 +504,7 @@ function renderControls() {
   $('human-caption').textContent = finished ? '每一局，都是一次练习' : checked && !blackTurn ? '先保护好你的帅' : '不急，想好了再落子';
   $('undo-button').disabled = session.records.length === 0;
   $('restart-button').disabled = false;
-  $('primary-action').disabled = !!task;
+  $('primary-action').disabled = !!task || moveEffects.busy;
   let title, description, primary, footnote;
   if (finished) {
     title = session.outcome.title; description = '看看终局讲解，带着新收获再来一局。'; primary = '再来一局'; footnote = '也可以悔棋，试一试不同的选择。';
@@ -453,10 +536,12 @@ function renderControls() {
   }
   $('invite-button').disabled = onlineBusy || onlineJoining;
   $('difficulty').disabled = isOnline();
-  $('sound-toggle').textContent = `落子音效：${moveSound.enabled ? '开' : '关'}`;
+  $('sound-toggle').textContent = `对局声音：${moveSound.enabled ? '开' : '关'}`;
   $('sound-toggle').setAttribute('aria-pressed', String(moveSound.enabled));
-  $('sound-toggle').title = moveSound.enabled ? '关闭落子音效，重新开启可试听' : '开启并试听落子音效';
+  $('sound-toggle').title = moveSound.enabled ? '关闭落子声、吃子语音和将军配乐' : '开启对局声音并试听落子声';
   if (isOnline()) renderOnlineControls();
+  renderMusicControls();
+  if (moveEffects.busy) $('primary-action').disabled = true;
 }
 
 function renderOnlineControls() {
@@ -515,7 +600,10 @@ function renderHistory() {
   });
 }
 
-function render() { renderBoard(); renderCoach(); renderControls(); renderHistory(); renderEndgameDialog(); }
+function render({ deferEndgame = false } = {}) {
+  renderBoard(); renderCoach(); renderControls(); renderHistory();
+  if (!deferEndgame) renderEndgameDialog();
+}
 
 function onSquare(index) {
   if (!canPlay() || task?.kind === 'ai') return;
@@ -554,12 +642,11 @@ function onSquare(index) {
   if (isOnline()) { void runOnline(() => onlineClient.move(move)); return; }
   cancelTask();
   session = commitMove(session, move);
-  moveSound.play();
-  clearSelection(); persist(); render();
+  clearSelection(); persist(); render({ deferEndgame: true }); playCommittedMove();
 }
 
 async function requestComputerMove() {
-  if (isOnline() || task || session.outcome || session.position.turn !== 'black') return;
+  if (isOnline() || task || moveEffects.busy || session.outcome || session.position.turn !== 'black') return;
   failedAI = false;
   const controller = new AbortController();
   const key = getPositionKey(session.position), token = revision;
@@ -569,7 +656,7 @@ async function requestComputerMove() {
     const move = await opponent.requestMove(session.position, { difficulty: session.difficulty, signal: controller.signal, entries: session.entries });
     if (task !== running || controller.signal.aborted || token !== revision || key !== getPositionKey(session.position)) return;
     if (!move || !validateMove(session.position, move).ok) throw new Error('电脑未能返回可用的走法，请重试。');
-    task = null; session = commitMove(session, move); moveSound.play(); clearSelection(); showNotice(''); persist(); render();
+    task = null; session = commitMove(session, move); clearSelection(); showNotice(''); persist(); render({ deferEndgame: true }); playCommittedMove();
   } catch (error) {
     if (task !== running || controller.signal.aborted || error?.name === 'AbortError') return;
     task = null; failedAI = true;
@@ -578,7 +665,7 @@ async function requestComputerMove() {
 }
 
 async function requestHint() {
-  if (isOnline() || task || session.outcome || session.position.turn !== 'red') return;
+  if (isOnline() || task || moveEffects.busy || session.outcome || session.position.turn !== 'red') return;
   const controller = new AbortController();
   const key = getPositionKey(session.position), token = revision;
   const running = { kind: 'hint', controller }; task = running;
@@ -601,7 +688,7 @@ async function requestHint() {
 
 function restart() {
   if (isOnline()) return;
-  cancelTask();
+  cancelTask(); resetMoveFeedback();
   newGameId();
   session = createSession({ teaching: session.teaching, difficulty: session.difficulty });
   clearSelection(); showNotice(''); persist(); render();
@@ -643,7 +730,7 @@ $('primary-action').addEventListener('click', () => {
 });
 $('undo-button').addEventListener('click', () => {
   if (isOnline() || !session.records.length) return;
-  cancelTask(); session = undoRound(session); clearSelection(); showNotice(''); persist(); render();
+  cancelTask(); resetMoveFeedback(); session = undoRound(session); clearSelection(); showNotice(''); persist(); render();
 });
 $('restart-button').addEventListener('click', askRestart);
 $('restart-dialog').addEventListener('close', () => {
@@ -671,19 +758,61 @@ $('teaching-toggle').addEventListener('change', event => {
 });
 $('difficulty').addEventListener('change', event => { session = { ...session, difficulty: event.target.value }; persist(); renderControls(); });
 $('sound-toggle').addEventListener('click', () => {
+  musicOperation += 1;
   moveSound.setEnabled(!moveSound.enabled);
-  if (moveSound.enabled) void moveSound.unlock({ preview: true });
+  battleAudio.setEnabled(moveSound.enabled);
+  if (moveSound.enabled) { void moveSound.unlock({ preview: true }); void battleAudio.unlock(); }
+  else musicPreviewing = false;
   try { localStorage.setItem('xiangqi-move-sound:v1', moveSound.enabled ? 'on' : 'off'); } catch { /* The preference is optional. */ }
   renderControls();
 });
 for (const eventName of ['pointerdown', 'pointerup', 'touchend', 'keydown', 'click']) document.addEventListener(eventName, event => {
-  if (event.isTrusted) void moveSound.unlock();
+  if (event.isTrusted) { void moveSound.unlock(); void battleAudio.unlock(); }
 }, { capture: true });
+$('check-music-file').addEventListener('change', event => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith('audio/') && !/\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i.test(file.name)) {
+    $('check-music-status').textContent = '请选择可以播放的音频文件，例如 MP3、M4A 或 WAV。';
+    event.target.value = '';
+    return;
+  }
+  if (!battleAudio.setMusicFile(file)) {
+    $('check-music-status').textContent = '这段音频暂时无法使用，请选择 MP3、M4A 或 WAV 音频。';
+    event.target.value = '';
+    return;
+  }
+  musicOperation += 1;
+  musicPreviewing = false;
+  $('check-music-status').textContent = `已选择「${file.name}」。可先试听，每次将军时自动播放。`;
+  renderMusicControls();
+});
+$('music-clear').addEventListener('click', () => {
+  musicOperation += 1;
+  battleAudio.setMusicFile(null);
+  musicPreviewing = false;
+  $('check-music-file').value = '';
+  $('check-music-status').textContent = '选择《关中王进行曲》音频后，每次将军自动播放。配乐仅在本次打开时使用。';
+  renderMusicControls();
+});
+$('music-preview').addEventListener('click', async () => {
+  const operation = ++musicOperation;
+  if (musicPreviewing) { battleAudio.stop(); musicPreviewing = false; renderMusicControls(); return; }
+  musicPreviewing = true;
+  renderMusicControls();
+  const played = await battleAudio.check();
+  if (operation !== musicOperation) return;
+  if (!played) {
+    musicPreviewing = false;
+    $('check-music-status').textContent = '这段音频暂时无法播放，请重新选择音频后试听。';
+    renderMusicControls();
+  }
+});
 $('invite-button').addEventListener('click', () => void enterOnline());
 $('copy-invite').addEventListener('click', () => void copyInvite());
 $('ready-button').addEventListener('click', () => void runOnline(() => onlineClient.ready(!onlineRoom.players[playerSide()].ready)));
 $('leave-room').addEventListener('click', () => void leaveOnline());
-window.addEventListener('pagehide', () => { cancelTask(); opponent.dispose(); onlineClient.dispose(); void moveSound.dispose(); });
+window.addEventListener('pagehide', () => { cancelTask(); moveEffects.dispose(); battleAudio.dispose(); opponent.dispose(); onlineClient.dispose(); clearTimeout(battleNoticeTimer); void moveSound.dispose(); });
 window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
 
 drawBoard(); populateRules(); initializeFloatingRules(); initializeFeedback(); render();
