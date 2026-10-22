@@ -182,6 +182,26 @@ test('bundled check music serves its real M4A bytes, audio MIME, HEAD and browse
   }
 });
 
+test('bundled collision sound serves the uploaded MP3 bytes, MIME, HEAD and range requests', async t => {
+  const f = await fixture(t);
+  const expected = await readFile(new URL('../assets/move-collision.mp3', import.meta.url));
+  const url = f.origin + '/assets/move-collision.mp3';
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Content-Type'), 'audio/mpeg');
+  assert.equal(Number(response.headers.get('Content-Length')), expected.length);
+  assert.equal(Buffer.from(await response.arrayBuffer()).equals(expected), true);
+  const head = await fetch(url, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('Accept-Ranges'), 'bytes');
+  assert.equal(Number(head.headers.get('Content-Length')), expected.length);
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  const partial = await fetch(url, { headers: { Range: 'bytes=0-31' } });
+  assert.equal(partial.status, 206);
+  assert.equal(partial.headers.get('Content-Range'), `bytes 0-31/${expected.length}`);
+  assert.equal(Buffer.from(await partial.arrayBuffer()).equals(expected.subarray(0, 32)), true);
+});
+
 test('music ranges reject malformed or unsatisfiable requests without exposing private files', async t => {
   const f = await fixture(t);
   const expected = await readFile(new URL('../assets/check-march.m4a', import.meta.url));

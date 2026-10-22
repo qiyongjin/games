@@ -24,6 +24,7 @@ const moveSound = createMoveSound();
 const battleAudio = createBattleAudio({ onStatus: handleAudioStatus });
 try { moveSound.setEnabled(localStorage.getItem('xiangqi-move-sound:v1') !== 'off'); } catch { /* Sound still works without storage. */ }
 battleAudio.setEnabled(moveSound.enabled);
+void moveSound.preload();
 const restored = loadSession();
 let session = restored.session ?? createSession();
 let soloSession = session;

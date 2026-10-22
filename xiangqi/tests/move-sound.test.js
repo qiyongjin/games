@@ -1,343 +1,249 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createMoveSound } from '../src/move-sound.js';
+import { createMoveSound, MOVE_SOUND_URL } from '../src/move-sound.js';
 
-function fakeAudioContext({ state = 'suspended', resume } = {}) {
-  const audio = {
-    state,
-    sampleRate: 48000,
-    destination: {},
-    resumeCalls: 0,
-    buffers: [],
-    sources: [],
-    volumes: [],
-    events: [],
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function fakeAudioContext({ state = 'suspended', resume, decode } = {}) {
+  return {
+    state, sampleRate: 48000, destination: {}, resumeCalls: 0,
+    buffers: [], sources: [], volumes: [], events: [], decodes: [],
+    decoded: { length: 116352, sampleRate: 48000, numberOfChannels: 2 },
     resume() {
-      this.resumeCalls += 1;
-      this.events.push('resume');
+      this.resumeCalls++; this.events.push('resume');
       if (resume) return resume(this);
-      this.state = 'running';
-      return Promise.resolve();
+      this.state = 'running'; return Promise.resolve();
     },
     close() { this.state = 'closed'; return Promise.resolve(); },
+    decodeAudioData(bytes) {
+      this.decodes.push(bytes);
+      return decode ? decode(this, bytes) : Promise.resolve(this.decoded);
+    },
     createBuffer(channels, length, sampleRate) {
       const samples = new Float32Array(length);
-      const buffer = { channels, length, sampleRate, getChannelData() { return samples; } };
-      this.buffers.push(buffer);
-      return buffer;
+      const buffer = { channels, length, sampleRate, getChannelData: () => samples };
+      this.buffers.push(buffer); return buffer;
     },
     createBufferSource() {
-      const audio = this;
       const source = {
-        starts: 0,
-        disconnected: false,
-        connect() {},
+        starts: 0, disconnected: false, connect() {},
         disconnect() { this.disconnected = true; },
-        start() { this.starts += 1; audio.events.push('start'); },
+        start: () => { source.starts++; this.events.push('start'); },
         stop() { this.stopped = true; },
       };
-      this.sources.push(source);
-      return source;
+      this.sources.push(source); return source;
     },
     createGain() {
-      const volume = {
-        gain: { value: 1 },
-        disconnected: false,
-        connect() {},
-        disconnect() { this.disconnected = true; },
-      };
-      this.volumes.push(volume);
-      return volume;
+      const volume = { gain: { value: 1 }, connect() {}, disconnect() { this.disconnected = true; } };
+      this.volumes.push(volume); return volume;
     },
   };
-  return audio;
 }
-
-function moveSources(audio) {
-  return audio.sources.filter(source => source.buffer?.length > 1);
+function fixture({ audio = fakeAudioContext(), fetchAudio, audioContextFactory } = {}) {
+  const encoded = Uint8Array.from([73, 68, 51, 4, 0, 8, 9, 10]).buffer;
+  const requests = [];
+  let contexts = 0, time = 0;
+  const sound = createMoveSound({
+    audioContextFactory: audioContextFactory || (() => { contexts++; return audio; }),
+    fetchAudio: async url => {
+      requests.push(url);
+      return fetchAudio ? fetchAudio(url) : { ok: true, arrayBuffer: async () => encoded };
+    },
+    now: () => time,
+  });
+  return { sound, audio, encoded, requests, get contexts() { return contexts; }, advance: ms => { time += ms; } };
 }
+const moveSources = audio => audio.sources.filter(source => source.buffer?.length > 1);
 
-test('audio is created on a user unlock and early move sounds are never replayed', async () => {
-  const audio = fakeAudioContext();
-  let contexts = 0;
-  const sound = createMoveSound({ audioContextFactory: () => { contexts += 1; return audio; } });
-  assert.equal(sound.play(), false);
-  assert.equal(sound.play(), false);
-  assert.equal(contexts, 0);
-  const unlocking = sound.unlock();
-  // Both calls must happen synchronously in the gesture, before Promise work.
-  assert.deepEqual(audio.events, ['start', 'resume']);
+test('preloading fetches the uploaded collision recording once without creating audio or replaying dropped moves', async () => {
+  const pending = deferred();
+  const f = fixture({ fetchAudio: () => pending.promise });
+  const first = f.sound.preload(), second = f.sound.preload();
+  assert.equal(first, second);
+  assert.equal(f.sound.play(), false);
+  await Promise.resolve();
+  assert.deepEqual(f.requests, [MOVE_SOUND_URL]);
+  assert.equal(MOVE_SOUND_URL, '/assets/move-collision.mp3');
+  assert.equal(f.contexts, 0);
+  pending.resolve({ ok: true, arrayBuffer: async () => f.encoded });
+  assert.equal(await first, true);
+  assert.equal(await f.sound.preload(), true);
+  assert.equal(f.contexts, 0);
+  assert.equal(moveSources(f.audio).length, 0);
+  assert.equal(await f.sound.unlock(), true);
+  assert.equal(moveSources(f.audio).length, 0);
+  assert.equal(f.sound.play(), true);
+  assert.equal(moveSources(f.audio)[0].buffer, f.audio.decoded);
+});
+
+test('the exact fetched bytes are decoded once and every move uses the cached full recording', async () => {
+  const f = fixture(); await f.sound.unlock();
+  assert.deepEqual(f.audio.events, ['start', 'resume']);
+  assert.equal(f.audio.buffers.length, 1, 'only a silent warmup is generated');
+  assert.equal(f.audio.buffers[0].length, 1);
+  assert.ok(f.audio.buffers[0].getChannelData(0).every(x => x === 0));
+  assert.equal(f.audio.volumes[0].gain.value, 0);
+  assert.deepEqual(f.audio.decodes[0], f.encoded);
+  assert.notEqual(f.audio.decodes[0], f.encoded, 'decoding cannot detach the retained download');
+  assert.equal(f.sound.play(), true); assert.equal(f.sound.play(), true);
+  await f.sound.unlock();
+  assert.equal(f.requests.length, 1); assert.equal(f.audio.decodes.length, 1);
+  assert.ok(moveSources(f.audio).every(source => source.buffer === f.audio.decoded));
+  moveSources(f.audio)[0].onended();
+  assert.equal(moveSources(f.audio)[0].disconnected, true);
+  assert.equal(f.audio.volumes[1].disconnected, true);
+});
+
+test('loading or decoding cannot queue old move sounds', async () => {
+  const decoded = deferred();
+  const f = fixture({ audio: fakeAudioContext({ decode: () => decoded.promise }) });
+  const unlocking = f.sound.unlock();
+  assert.equal(f.sound.play(), false); assert.equal(f.sound.play(), false);
+  await f.sound.preload(); decoded.resolve(f.audio.decoded);
   assert.equal(await unlocking, true);
-  assert.equal(contexts, 1);
-  assert.equal(audio.sources.length, 1);
-  assert.equal(audio.sources[0].buffer.length, 1);
-  assert.ok(audio.sources[0].buffer.getChannelData(0).every(value => value === 0));
-  assert.equal(audio.volumes[0].gain.value, 0);
-  assert.equal(moveSources(audio).length, 0);
-  assert.equal(sound.play(), true);
-  assert.equal(moveSources(audio).length, 1);
-  assert.equal(moveSources(audio)[0].starts, 1);
-  assert.equal(await sound.unlock(), true);
-  assert.equal(contexts, 1);
-  assert.equal(audio.resumeCalls, 1);
-  assert.equal(audio.sources.length, 2);
+  assert.equal(moveSources(f.audio).length, 0);
+  assert.equal(f.sound.play(), true);
 });
 
-test('a short, finite wooden click is cached and playback releases its nodes', async () => {
-  const audio = fakeAudioContext();
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  await sound.unlock();
-  sound.play();
-  sound.play();
-  assert.equal(audio.buffers.length, 2);
-  const buffer = audio.buffers[1];
-  assert.equal(buffer.channels, 1);
-  assert.equal(buffer.length / buffer.sampleRate, 0.12);
-  const samples = buffer.getChannelData(0);
-  assert.ok(samples.every(Number.isFinite));
-  assert.equal(samples[0], 0);
-  assert.ok(samples.some(value => Math.abs(value) > 0.1));
-  assert.ok(Math.max(...samples.map(Math.abs)) < 1);
-  assert.ok(samples.slice(-480).every(value => Math.abs(value) < 0.004));
-  assert.equal(moveSources(audio)[0].buffer, buffer);
-  moveSources(audio)[0].onended();
-  assert.equal(moveSources(audio)[0].disconnected, true);
-  assert.equal(audio.volumes[1].disconnected, true);
-  audio.sources[0].onended();
-  assert.equal(audio.sources[0].disconnected, true);
-  assert.equal(audio.volumes[0].disconnected, true);
+test('failed downloads stay silent without a generated fallback and retry on a later gesture', async () => {
+  let failed = true;
+  const f = fixture({ fetchAudio: async () => failed ? { ok: false } : { ok: true, arrayBuffer: async () => f.encoded } });
+  assert.equal(await f.sound.unlock(), false); assert.equal(f.sound.play(), false);
+  await f.sound.unlock(); await f.sound.unlock();
+  assert.equal(f.requests.length, 1, 'pointer event bursts do not hammer a failed URL');
+  assert.equal(moveSources(f.audio).length, 0);
+  failed = false; f.advance(1001);
+  assert.equal(await f.sound.unlock(), true); assert.equal(f.requests.length, 2);
+  assert.equal(moveSources(f.audio).length, 0); assert.equal(f.sound.play(), true);
 });
 
-test('mute suppresses new audio and unmute permits the next move', async () => {
-  const audio = fakeAudioContext();
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  sound.setEnabled(false);
-  assert.equal(sound.enabled, false);
-  assert.equal(await sound.unlock(), false);
-  assert.equal(audio.resumeCalls, 0);
-  assert.equal(sound.play(), false);
-  sound.setEnabled(true);
-  assert.equal(sound.enabled, true);
-  await sound.unlock();
-  assert.equal(sound.play(), true);
-  sound.setEnabled(false);
-  assert.equal(sound.play(), false);
-  assert.equal(moveSources(audio).length, 1);
-});
-
-test('unsupported audio, denied autoplay and broken devices are best effort', async () => {
-  for (const audioContextFactory of [() => null, () => { throw new Error('Unavailable'); }]) {
-    const sound = createMoveSound({ audioContextFactory });
-    assert.equal(await sound.unlock(), false);
-    assert.equal(sound.play(), false);
+test('empty, rejected or invalid audio stays silent and a later decode can recover', async () => {
+  for (const fetchAudio of [() => Promise.reject(new Error('offline')), async () => ({ok:true,arrayBuffer:async()=>new ArrayBuffer(0)})]) {
+    const f = fixture({fetchAudio});
+    assert.equal(await f.sound.unlock({preview:true}),false);
+    assert.equal(f.sound.play(),false); assert.equal(moveSources(f.audio).length,0);
   }
-  const audio = fakeAudioContext({ resume: () => Promise.reject(new Error('NotAllowedError')) });
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  assert.equal(await sound.unlock(), false);
-  assert.equal(sound.play(), false);
-  audio.resume = function () { this.state = 'running'; };
-  assert.equal(await sound.unlock(), true);
-  audio.createBufferSource = () => { throw new Error('Device lost'); };
-  assert.equal(sound.play(), false);
+  let valid = false;
+  const f = fixture({audio:fakeAudioContext({decode: current => valid ? Promise.resolve(current.decoded) : Promise.reject(new Error('bad MP3'))})});
+  assert.equal(await f.sound.unlock(),false); assert.equal(await f.sound.unlock(),false);
+  assert.equal(f.audio.decodes.length,1);
+  valid=true; f.advance(1001);
+  assert.equal(await f.sound.unlock(),true); assert.equal(f.requests.length,1);
+  assert.equal(f.audio.decodes.length,2); assert.equal(f.sound.play(),true);
 });
 
-test('a new gesture retries a blocked resume and dropped moves never burst afterward', async () => {
-  const completeResumes = [];
-  const audio = fakeAudioContext({ resume: current => new Promise(resolve => {
-    completeResumes.push(() => { current.state = 'running'; resolve(); });
-  }) });
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  const firstUnlock = sound.unlock();
-  const secondUnlock = sound.unlock();
-  assert.equal(audio.resumeCalls, 2);
-  assert.deepEqual(audio.events, ['start', 'resume', 'start', 'resume']);
-  assert.equal(sound.play(), false);
-  assert.equal(sound.play(), false);
-  completeResumes[1]();
-  assert.equal(await secondUnlock, true);
-  completeResumes[0]();
-  assert.deepEqual(await Promise.all([firstUnlock, secondUnlock]), [true, true]);
-  assert.equal(moveSources(audio).length, 0);
-  assert.equal(sound.play(), true);
-  assert.equal(moveSources(audio).length, 1);
+test('each gesture retries blocked resume while concurrent unlocks share decoding without replaying moves', async () => {
+  const resumes=[];
+  const f=fixture({audio:fakeAudioContext({resume:current=>new Promise(resolve=>resumes.push(()=>{current.state='running';resolve();}))})});
+  const first=f.sound.unlock(),second=f.sound.unlock();
+  assert.equal(f.audio.resumeCalls,2);
+  assert.deepEqual(f.audio.events,['start','resume','start','resume']);
+  assert.equal(f.sound.play(),false);
+  resumes[1](); resumes[0]();
+  assert.deepEqual(await Promise.all([first,second]),[true,true]);
+  assert.equal(f.audio.decodes.length,1); assert.equal(moveSources(f.audio).length,0);
+  assert.equal(f.sound.play(),true);
 });
 
-test('an initially running context still primes output once inside a gesture', async () => {
-  const audio = fakeAudioContext({ state: 'running' });
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  assert.equal(await sound.unlock(), true);
-  assert.equal(audio.sources.length, 1);
-  assert.equal(audio.sources[0].buffer.length, 1);
-  assert.equal(audio.resumeCalls, 0);
-  assert.equal(await sound.unlock(), true);
-  assert.equal(audio.sources.length, 1);
-  assert.equal(sound.play(), true);
+test('a running context primes silently once and a cached preview starts synchronously in the gesture', async () => {
+  const f=fixture({audio:fakeAudioContext({state:'running'})}); await f.sound.unlock();
+  assert.equal(f.audio.sources.length,1); assert.equal(f.audio.resumeCalls,0);
+  const preview=f.sound.unlock({preview:true});
+  assert.equal(moveSources(f.audio).length,1); assert.equal(moveSources(f.audio)[0].starts,1);
+  assert.equal(f.audio.volumes[1].gain.value,0.5); assert.equal(await preview,true);
+  await f.sound.unlock(); assert.equal(moveSources(f.audio).length,1);
 });
 
-test('only an explicit preview schedules one audible click synchronously in the gesture', async () => {
-  let completeResume;
-  const audio = fakeAudioContext({ resume: current => new Promise(resolve => {
-    completeResume = () => { current.state = 'running'; resolve(); };
-  }) });
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  const preview = sound.unlock({ preview: true });
-  assert.deepEqual(audio.events, ['start', 'start', 'resume']);
-  assert.equal(moveSources(audio).length, 1);
-  assert.equal(moveSources(audio)[0].starts, 1);
-  assert.equal(audio.volumes[0].gain.value, 0);
-  assert.equal(audio.volumes[1].gain.value, 0.5);
-  assert.equal(sound.play(), false);
-  completeResume();
-  assert.equal(await preview, true);
-  assert.equal(await sound.unlock(), true);
-  assert.equal(moveSources(audio).length, 1);
-  assert.equal(await sound.unlock({ preview: true }), true);
-  assert.equal(moveSources(audio).length, 2);
-  assert.equal(moveSources(audio)[0].buffer, moveSources(audio)[1].buffer);
+test('a first intentional preview waits for decoding but mute invalidates it even after re-enabling', async () => {
+  const decoding=deferred();
+  const f=fixture({audio:fakeAudioContext({decode:()=>decoding.promise})});
+  const preview=f.sound.unlock({preview:true});
+  f.sound.setEnabled(false); f.sound.setEnabled(true); decoding.resolve(f.audio.decoded);
+  assert.equal(await preview,false); assert.equal(moveSources(f.audio).length,0);
+  assert.equal(await f.sound.unlock(),true); assert.equal(moveSources(f.audio).length,0);
+  assert.equal(f.sound.play(),true);
 });
 
-test('muting suppresses preview and stops a preview awaiting audio permission', async () => {
-  let completeResume;
-  const audio = fakeAudioContext({ resume: current => new Promise(resolve => {
-    completeResume = () => { current.state = 'running'; resolve(); };
-  }) });
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  sound.setEnabled(false);
-  assert.equal(await sound.unlock({ preview: true }), false);
-  assert.equal(audio.sources.length, 0);
-  sound.setEnabled(true);
-  const preview = sound.unlock({ preview: true });
-  sound.setEnabled(false);
-  assert.ok(audio.sources.every(source => source.stopped && source.disconnected));
-  assert.ok(audio.volumes.every(volume => volume.disconnected));
-  completeResume();
-  assert.equal(await preview, false);
-  assert.equal(sound.play(), false);
-  assert.equal(moveSources(audio).length, 1);
+test('multiple previews awaiting download keep only the latest intentional request', async () => {
+  const download=deferred(); const f=fixture({fetchAudio:()=>download.promise});
+  const first=f.sound.unlock({preview:true}),second=f.sound.unlock({preview:true});
+  download.resolve({ok:true,arrayBuffer:async()=>f.encoded});
+  assert.deepEqual(await Promise.all([first,second]),[false,true]);
+  assert.equal(moveSources(f.audio).length,1);
 });
 
-test('a denied preview is stopped instead of playing on a later gesture', async () => {
-  const audio = fakeAudioContext({ resume: () => Promise.reject(new Error('NotAllowedError')) });
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  assert.equal(await sound.unlock({ preview: true }), false);
-  const preview = moveSources(audio)[0];
-  assert.equal(preview.stopped, true);
-  assert.equal(preview.disconnected, true);
-  audio.resume = function () { this.state = 'running'; };
-  assert.equal(await sound.unlock(), true);
-  assert.equal(moveSources(audio).length, 1);
-  assert.equal(sound.play(), true);
-  assert.equal(moveSources(audio).length, 2);
+test('mute stops active audio, blocks previews, and re-enabling does not replay anything', async () => {
+  const f=fixture(); await f.sound.unlock(); f.sound.play(); f.sound.setEnabled(false);
+  assert.equal(f.sound.enabled,false);
+  assert.ok(f.audio.sources.every(source=>source.stopped&&source.disconnected));
+  assert.equal(f.sound.play(),false); assert.equal(await f.sound.unlock({preview:true}),false);
+  f.sound.setEnabled(true); assert.equal(f.sound.enabled,true); await f.sound.unlock();
+  assert.equal(moveSources(f.audio).length,1); assert.equal(f.sound.play(),true);
 });
 
-test('disposing cancels an intentional preview while resume is pending', async () => {
-  let completeResume;
-  const audio = fakeAudioContext({ resume: () => new Promise(resolve => { completeResume = resolve; }) });
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  const preview = sound.unlock({ preview: true });
-  await sound.dispose();
-  assert.ok(audio.sources.every(source => source.stopped && source.disconnected));
-  completeResume();
-  assert.equal(await preview, false);
-  assert.equal(sound.play(), false);
+test('a cached preview denied resume stops and never reappears on a later gesture', async () => {
+  const f=fixture(); await f.sound.unlock(); f.audio.state='suspended';
+  f.audio.resume=()=>Promise.reject(new Error('NotAllowedError'));
+  assert.equal(await f.sound.unlock({preview:true}),false);
+  assert.equal(moveSources(f.audio)[0].stopped,true);
+  f.audio.resume=function(){this.state='running';return Promise.resolve();};
+  assert.equal(await f.sound.unlock(),true); assert.equal(moveSources(f.audio).length,1);
+  assert.equal(f.sound.play(),true);
 });
 
-test('failed warm-up still resumes and the next gesture can recover output', async () => {
-  const audio = fakeAudioContext();
-  const createSource = audio.createBufferSource;
-  audio.createBufferSource = function () {
-    const source = createSource.call(this);
-    source.start = () => { throw new Error('Output unavailable'); };
-    return source;
-  };
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  assert.equal(await sound.unlock(), true);
-  assert.equal(audio.resumeCalls, 1);
-  assert.equal(audio.sources[0].disconnected, true);
-  assert.equal(audio.volumes[0].disconnected, true);
-  audio.createBufferSource = createSource;
-  assert.equal(await sound.unlock(), true);
-  assert.equal(audio.sources[1].starts, 1);
-  assert.equal(sound.play(), true);
+test('dispose invalidates decoding and an old completion cannot replace the new context sample', async () => {
+  const pending=deferred();
+  const first=fakeAudioContext({decode:()=>pending.promise}),second=fakeAudioContext(); let contexts=0;
+  const f=fixture({audio:first,audioContextFactory:()=>contexts++?second:first});
+  const preview=f.sound.unlock({preview:true}); await f.sound.preload(); await Promise.resolve();
+  await f.sound.dispose(); assert.equal(await f.sound.unlock(),true);
+  pending.resolve(first.decoded); assert.equal(await preview,false);
+  assert.equal(moveSources(first).length,0); assert.equal(f.sound.play(),true);
+  assert.equal(moveSources(second)[0].buffer,second.decoded); assert.equal(f.requests.length,1);
 });
 
-test('a pending resume cannot revive a disposed context or play an old move', async () => {
-  let completeResume;
-  const first = fakeAudioContext({ resume: () => new Promise(resolve => { completeResume = resolve; }) });
-  const second = fakeAudioContext();
-  let contexts = 0;
-  const sound = createMoveSound({ audioContextFactory: () => contexts++ ? second : first });
-  const pending = sound.unlock();
-  assert.equal(sound.play(), false);
-  await sound.dispose();
-  assert.equal(await sound.unlock(), true);
-  completeResume();
-  assert.equal(await pending, false);
-  assert.equal(moveSources(first).length, 0);
-  assert.equal(moveSources(second).length, 0);
-  assert.equal(sound.play(), true);
-  assert.equal(moveSources(second).length, 1);
+test('a pending resume cannot revive a disposed context and active nodes are released', async () => {
+  const pending=deferred();
+  const first=fakeAudioContext({resume:()=>pending.promise}),second=fakeAudioContext(); let contexts=0;
+  const f=fixture({audio:first,audioContextFactory:()=>contexts++?second:first});
+  const unlocking=f.sound.unlock(); await f.sound.dispose();
+  assert.ok(first.sources.every(source=>source.stopped&&source.disconnected));
+  assert.equal(await f.sound.unlock(),true); pending.resolve();
+  assert.equal(await unlocking,false); assert.equal(f.sound.play(),true);
+  const active=moveSources(second)[0]; await f.sound.dispose();
+  assert.equal(active.stopped,true); assert.equal(active.disconnected,true);
 });
 
-test('suspension drops moves until another gesture and a closed context is replaced', async () => {
-  const first = fakeAudioContext();
-  const second = fakeAudioContext();
-  let contexts = 0;
-  const sound = createMoveSound({ audioContextFactory: () => contexts++ ? second : first });
-  await sound.unlock();
-  sound.play();
-  first.state = 'suspended';
-  assert.equal(sound.play(), false);
-  assert.equal(await sound.unlock(), true);
-  assert.equal(sound.play(), true);
-  assert.equal(first.resumeCalls, 2);
-  first.state = 'interrupted';
-  assert.equal(sound.play(), false);
-  assert.equal(await sound.unlock(), true);
-  assert.equal(first.resumeCalls, 3);
-  first.state = 'closed';
-  assert.equal(sound.play(), false);
-  assert.equal(await sound.unlock(), true);
-  assert.equal(sound.play(), true);
-  assert.equal(contexts, 2);
-  assert.equal(moveSources(second).length, 1);
-  assert.notEqual(moveSources(first)[0].buffer, moveSources(second)[0].buffer);
+test('iOS interruptions resume on a gesture and closed contexts reuse download with fresh decoding', async () => {
+  const first=fakeAudioContext(),second=fakeAudioContext(); let contexts=0;
+  const f=fixture({audio:first,audioContextFactory:()=>contexts++?second:first});
+  await f.sound.unlock(); f.sound.play();
+  for(const state of ['suspended','interrupted']){
+    first.state=state; assert.equal(f.sound.play(),false);
+    assert.equal(await f.sound.unlock(),true); assert.equal(f.sound.play(),true);
+  }
+  assert.equal(first.resumeCalls,3); first.state='closed';
+  assert.equal(await f.sound.unlock(),true); assert.equal(f.sound.play(),true);
+  assert.equal(contexts,2); assert.equal(f.requests.length,1);
+  assert.equal(first.decodes.length,1); assert.equal(second.decodes.length,1);
+  assert.equal(moveSources(second)[0].buffer,second.decoded);
 });
 
-test('cleanup stops active sounds and can recover when returning from page history', async () => {
-  const first = fakeAudioContext();
-  const second = fakeAudioContext();
-  let contexts = 0;
-  const sound = createMoveSound({ audioContextFactory: () => contexts++ ? second : first });
-  await sound.unlock();
-  sound.play();
-  const source = moveSources(first)[0];
-  await sound.dispose();
-  assert.equal(source.stopped, true);
-  assert.equal(source.disconnected, true);
-  assert.equal(first.sources[0].stopped, true);
-  assert.equal(first.sources[0].disconnected, true);
-  assert.equal(first.state, 'closed');
-  assert.equal(sound.play(), false);
-  await sound.dispose();
-  assert.equal(await sound.unlock(), true);
-  assert.equal(sound.play(), true);
-  assert.equal(contexts, 2);
-});
-
-test('a failed playback disconnects partially connected nodes and cleanup never rejects', async () => {
-  const audio = fakeAudioContext();
-  const originalCreateSource = audio.createBufferSource;
-  audio.createBufferSource = function () {
-    const source = originalCreateSource.call(this);
-    source.start = () => { throw new Error('Start denied'); };
-    return source;
-  };
-  const sound = createMoveSound({ audioContextFactory: () => audio });
-  await sound.unlock();
-  assert.equal(sound.play(), false);
-  assert.equal(audio.sources[0].disconnected, true);
-  assert.equal(audio.volumes[0].disconnected, true);
-  audio.close = () => Promise.reject(new Error('Close failed'));
-  await assert.doesNotReject(sound.dispose());
+test('unsupported output and failed sources remain best effort with clean nodes and recoverable warmup', async () => {
+  for(const audioContextFactory of [()=>null,()=>{throw new Error('unsupported');}]){
+    const f=fixture({audioContextFactory});
+    assert.equal(await f.sound.unlock(),false); assert.equal(f.sound.play(),false);
+  }
+  const f=fixture(); const original=f.audio.createBufferSource;
+  f.audio.createBufferSource=function(){const source=original.call(this);source.start=()=>{throw new Error('output lost');};return source;};
+  assert.equal(await f.sound.unlock(),true); assert.equal(f.audio.resumeCalls,1);
+  assert.equal(f.audio.sources[0].disconnected,true); assert.equal(f.sound.play(),false);
+  assert.ok(f.audio.volumes.every(volume=>volume.disconnected));
+  f.audio.createBufferSource=original;
+  assert.equal(await f.sound.unlock(),true); assert.equal(f.sound.play(),true);
+  f.audio.close=()=>Promise.reject(new Error('close failure'));
+  await assert.doesNotReject(f.sound.dispose());
 });

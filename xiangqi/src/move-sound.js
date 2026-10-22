@@ -1,48 +1,105 @@
-// One shared context keeps the brief wooden-piece sound ready for later moves.
-// unlock() belongs in a user gesture; play() deliberately never queues audio.
-export function createMoveSound({ audioContextFactory = defaultAudioContextFactory } = {}) {
+export const MOVE_SOUND_URL = '/assets/move-collision.mp3';
+
+// Fetch before interaction; a gesture unlocks and decodes the real recording.
+// play() never queues a missed move while loading or waiting for permission.
+export function createMoveSound({
+  audioContextFactory = defaultAudioContextFactory,
+  fetchAudio = (...args) => globalThis.fetch(...args),
+  audioUrl = MOVE_SOUND_URL,
+  now = () => globalThis.performance?.now() ?? Date.now(),
+} = {}) {
   let enabled = true;
   let context = null;
   let buffer = null;
+  let encoded = null;
+  let loading = null;
+  let decoding = null;
+  let loadFailedAt = -Infinity;
+  let decodeFailure = null;
   let primed = false;
+  let revision = 0;
+  let previewRevision = 0;
   const activeSounds = new Set();
 
+  function preload() {
+    if (encoded) return Promise.resolve(true);
+    if (loading) return loading;
+    // One touch can fire several events; avoid hammering a failed resource.
+    if (now() - loadFailedAt < 1000) return Promise.resolve(false);
+    const pending = Promise.resolve().then(async () => {
+      const response = await fetchAudio(audioUrl);
+      if (!response?.ok) throw new Error('Move audio unavailable');
+      const data = await response.arrayBuffer();
+      if (!data?.byteLength) throw new Error('Move audio is empty');
+      encoded = data;
+      loadFailedAt = -Infinity;
+      return true;
+    }).catch(() => { loadFailedAt = now(); return false; }).finally(() => {
+      if (loading === pending) loading = null;
+    });
+    loading = pending;
+    return pending;
+  }
+
+  function prepareBuffer(current) {
+    if (buffer && context === current) return Promise.resolve(buffer);
+    if (decoding?.context === current) return decoding.promise;
+    if (decodeFailure?.context === current && now() - decodeFailure.at < 1000) return Promise.resolve(null);
+    const pending = preload().then(async loaded => {
+      if (!loaded || context !== current || current.state === 'closed') return null;
+      // Browsers can detach decode input. Retain the download for a new context.
+      const decoded = await current.decodeAudioData(encoded.slice(0));
+      if (!decoded || context !== current || current.state === 'closed') return null;
+      buffer = decoded;
+      decodeFailure = null;
+      return decoded;
+    }).catch(() => {
+      if (context === current) decodeFailure = { context: current, at: now() };
+      return null;
+    }).finally(() => {
+      if (decoding?.promise === pending) decoding = null;
+    });
+    decoding = { context: current, promise: pending };
+    return pending;
+  }
+
   function disconnect(source, volume) {
-    try { source?.disconnect(); } catch { /* Audio is optional. */ }
-    try { volume?.disconnect(); } catch { /* Audio is optional. */ }
+    try { source?.disconnect(); } catch { /* Optional audio. */ }
+    try { volume?.disconnect(); } catch { /* Optional audio. */ }
   }
 
   async function unlock({ preview = false } = {}) {
     if (!enabled) return false;
+    const currentRevision = revision;
+    const previewRequest = preview ? ++previewRevision : null;
     let previewSound = null;
     try {
       if (!context || context.state === 'closed') {
         context = audioContextFactory();
         buffer = null;
+        decoding = null;
         primed = false;
       }
       if (!context) return false;
       const current = context;
       if (!primed || current.state !== 'running') {
-        // Start within the gesture itself, before any await. Some Safari versions
-        // need an actual source to initialize output, even after resume(). This
-        // zero-filled frame is silent and never replays a previously missed move.
-        try {
-          primed = !!startBuffer(current.createBuffer(1, 1, current.sampleRate), 0);
-        } catch { /* A failed warm-up must not prevent resume(). */ }
+        // Prime Safari synchronously in the gesture with one silent frame.
+        try { primed = !!startBuffer(current.createBuffer(1, 1, current.sampleRate), 0); }
+        catch { /* A failed warm-up must not prevent resume(). */ }
       }
-      // An explicit sound-on click can preview the real sound. Schedule it in
-      // the same gesture too: WKWebView may require playback, not just resume.
-      // Only this intentional preview may be scheduled before audio is running.
-      previewSound = preview ? startWoodenClick() : null;
-      if (current.state === 'running') return !preview || !!previewSound;
-      // Do not reuse an earlier pending resume: touch/pointerdown may precede
-      // iOS user activation and stay pending. A later touchend/click must retry
-      // resume synchronously while that new gesture is still active.
-      await current.resume();
-      const unlocked = enabled && current === context && current.state === 'running' && (!preview || !!previewSound);
-      if (!unlocked) stopSound(previewSound);
-      return unlocked;
+      // Cached previews start inside the sound-on gesture. First-time previews
+      // wait for decoding and must still pass mute/disposal checks afterwards.
+      previewSound = preview && buffer ? startCollision() : null;
+      const resumed = current.state === 'running' ? Promise.resolve() : current.resume();
+      const [decoded] = await Promise.all([prepareBuffer(current), resumed]);
+      const ready = enabled && currentRevision === revision && current === context
+        && current.state === 'running' && !!decoded;
+      if (!ready || preview && previewRequest !== previewRevision) {
+        stopSound(previewSound);
+        return false;
+      }
+      if (preview && !previewSound) previewSound = startCollision();
+      return !preview || !!previewSound;
     } catch {
       stopSound(previewSound);
       return false;
@@ -50,17 +107,12 @@ export function createMoveSound({ audioContextFactory = defaultAudioContextFacto
   }
 
   function play() {
-    if (!enabled || !context || context.state !== 'running') return false;
-    return !!startWoodenClick();
+    if (!enabled || !context || context.state !== 'running' || !buffer) return false;
+    return !!startCollision();
   }
 
-  function startWoodenClick() {
-    try {
-      buffer ??= createWoodenClick(context);
-      return startBuffer(buffer, 0.5);
-    } catch {
-      return null;
-    }
+  function startCollision() {
+    return buffer ? startBuffer(buffer, 0.5) : null;
   }
 
   function startBuffer(audioBuffer, gain) {
@@ -82,9 +134,7 @@ export function createMoveSound({ audioContextFactory = defaultAudioContextFacto
       source.start();
       return active;
     } catch {
-      for (const active of activeSounds) {
-        if (active.source === source) activeSounds.delete(active);
-      }
+      for (const active of activeSounds) if (active.source === source) activeSounds.delete(active);
       disconnect(source, volume);
       return null;
     }
@@ -93,7 +143,7 @@ export function createMoveSound({ audioContextFactory = defaultAudioContextFacto
   function stopSound(active) {
     if (!active) return;
     activeSounds.delete(active);
-    try { active.source.stop(); } catch { /* It may have already ended. */ }
+    try { active.source.stop(); } catch { /* May already have ended. */ }
     disconnect(active.source, active.volume);
   }
 
@@ -102,23 +152,23 @@ export function createMoveSound({ audioContextFactory = defaultAudioContextFacto
   }
 
   async function dispose() {
+    revision += 1;
+    previewRevision += 1;
     const current = context;
     context = null;
     buffer = null;
+    decoding = null;
     primed = false;
     stopActiveSounds();
-    try {
-      if (current && current.state !== 'closed') await current.close();
-    } catch { /* Audio cleanup must not interfere with navigation. */ }
+    try { if (current && current.state !== 'closed') await current.close(); }
+    catch { /* Cleanup must not interfere with navigation. */ }
   }
 
   return {
-    unlock,
-    play,
-    dispose,
+    preload, unlock, play, dispose,
     setEnabled(value) {
       enabled = !!value;
-      if (!enabled) stopActiveSounds();
+      if (!enabled) { revision += 1; stopActiveSounds(); }
     },
     get enabled() { return enabled; },
   };
@@ -127,25 +177,4 @@ export function createMoveSound({ audioContextFactory = defaultAudioContextFacto
 function defaultAudioContextFactory() {
   const AudioContext = globalThis.AudioContext ?? globalThis.webkitAudioContext;
   return AudioContext ? new AudioContext() : null;
-}
-
-function createWoodenClick(context) {
-  const duration = 0.12;
-  const buffer = context.createBuffer(1, Math.ceil(context.sampleRate * duration), context.sampleRate);
-  const samples = buffer.getChannelData(0);
-  let seed = 751;
-  let noise = 0;
-  for (let i = 0; i < samples.length; i += 1) {
-    const time = i / context.sampleRate;
-    // A filtered impact and three rapidly fading resonances resemble a piece
-    // meeting a wooden board, with a soft attack to avoid an electrical pop.
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    noise += 0.22 * ((seed / 0xffffffff * 2 - 1) - noise);
-    const attack = Math.min(1, time / 0.0015);
-    const resonance = Math.sin(2 * Math.PI * 185 * time) * 0.43 * Math.exp(-time / 0.022)
-      + Math.sin(2 * Math.PI * 620 * time) * 0.23 * Math.exp(-time / 0.014)
-      + Math.sin(2 * Math.PI * 1230 * time) * 0.1 * Math.exp(-time / 0.009);
-    samples[i] = attack * (resonance + noise * 0.55 * Math.exp(-time / 0.012));
-  }
-  return buffer;
 }

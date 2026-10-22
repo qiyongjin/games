@@ -17,7 +17,7 @@ const COOKIE_VISITOR = 'yibu_visitor';
 const token = () => randomBytes(32).toString('base64url');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const safeId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{8,100}$/.test(value);
-const publicTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.m4a': 'audio/mp4' };
+const publicTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg' };
 
 class RequestError extends Error {
   constructor(status, message, code) { super(message); this.status = status; this.code = code; }
@@ -272,7 +272,7 @@ export async function createXiangqiServer(options = {}) {
   async function serveStatic(request, response, pathname) {
     if (!['GET', 'HEAD'].includes(request.method)) fail(405, '此地址不支持该操作。');
     const publicPath = pathname === '/' ? '/index.html' : pathname === '/admin' ? '/admin.html' : pathname;
-    if (!/^\/(?:index\.html|styles\.css|admin\.html|admin\.css|src\/[A-Za-z0-9_-]+\.js|assets\/[A-Za-z0-9_-]+\.(?:svg|png|webp|jpg|m4a))$/.test(publicPath)) fail(404, '文件不存在。');
+    if (!/^\/(?:index\.html|styles\.css|admin\.html|admin\.css|src\/[A-Za-z0-9_-]+\.js|assets\/[A-Za-z0-9_-]+\.(?:svg|png|webp|jpg|m4a|mp3))$/.test(publicPath)) fail(404, '文件不存在。');
     const file = resolve(root, `.${publicPath}`);
     let actual;
     try { actual = await realpath(file); } catch { fail(404, '文件不存在。'); }
@@ -281,9 +281,9 @@ export async function createXiangqiServer(options = {}) {
     const info = await stat(actual);
     if (!info.isFile()) fail(404, '文件不存在。');
     const headers = { 'Content-Type': publicTypes[extname(actual)] || 'application/octet-stream', 'Content-Length': info.size };
-    if (extname(actual) === '.m4a') {
+    if (['.m4a', '.mp3'].includes(extname(actual))) {
       headers['Accept-Ranges'] = 'bytes';
-      // Safari probes M4A byte ranges before decoding. Only the same public
+      // Browsers can probe audio byte ranges before decoding. Only the same public
       // whitelist and realpath-checked files may be read, including for ranges.
       if (request.method === 'GET' && request.headers.range) {
         const range = byteRange(request.headers.range, info.size);
