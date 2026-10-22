@@ -25,6 +25,7 @@ const battleAudio = createBattleAudio({ onStatus: handleAudioStatus });
 try { moveSound.setEnabled(localStorage.getItem('xiangqi-move-sound:v1') !== 'off'); } catch { /* Sound still works without storage. */ }
 battleAudio.setEnabled(moveSound.enabled);
 void moveSound.preload();
+void battleAudio.preload();
 const restored = loadSession();
 let session = restored.session ?? createSession();
 let soloSession = session;
@@ -285,8 +286,8 @@ function handleBattleAnnouncement({ kind, text, type, side }) {
   clearTimeout(battleNoticeTimer);
   battleNoticeTimer = setTimeout(() => { banner.hidden = true; }, kind === 'check' ? 2800 : 2400);
   if (kind === 'capture') {
-    const spoken = battleAudio.capture();
-    $('speech-status').hidden = !!spoken || !moveSound.enabled;
+    const played = battleAudio.capture();
+    $('speech-status').hidden = !!played || !moveSound.enabled;
   }
   if (kind === 'check') {
     const operation = ++musicOperation;
@@ -336,7 +337,8 @@ function useBuiltInMusic() {
 }
 
 function handleAudioStatus({ state, message }) {
-  if (state === 'speech-unavailable') {
+  if (state === 'capture-ready') $('speech-status').hidden = true;
+  if (state === 'capture-unavailable') {
     $('speech-status').textContent = message;
     $('speech-status').hidden = false;
   }

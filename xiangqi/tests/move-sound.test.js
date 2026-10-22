@@ -184,6 +184,34 @@ test('mute stops active audio, blocks previews, and re-enabling does not replay 
   assert.equal(moveSources(f.audio).length,1); assert.equal(f.sound.play(),true);
 });
 
+test('stop releases the current recording and keeps its cached sample ready for an intentional replay', async () => {
+  const f = fixture();
+  await f.sound.unlock();
+  f.sound.play();
+  const first = moveSources(f.audio)[0];
+  f.sound.stop();
+  assert.equal(first.stopped, true);
+  assert.equal(first.disconnected, true);
+  assert.equal(f.audio.state, 'running');
+  assert.equal(f.sound.play(), true);
+  assert.equal(moveSources(f.audio).length, 2);
+  assert.equal(f.audio.decodes.length, 1);
+  assert.equal(f.requests.length, 1);
+});
+
+test('stop invalidates a pending preview without dropping the decoded cache for later captures', async () => {
+  const decoding = deferred();
+  const f = fixture({ audio: fakeAudioContext({ decode: () => decoding.promise }) });
+  const preview = f.sound.unlock({ preview: true });
+  f.sound.stop();
+  decoding.resolve(f.audio.decoded);
+  assert.equal(await preview, false);
+  assert.equal(moveSources(f.audio).length, 0);
+  assert.equal(await f.sound.unlock(), true);
+  assert.equal(f.sound.play(), true);
+  assert.equal(f.audio.decodes.length, 1);
+});
+
 test('a cached preview denied resume stops and never reappears on a later gesture', async () => {
   const f=fixture(); await f.sound.unlock(); f.audio.state='suspended';
   f.audio.resume=()=>Promise.reject(new Error('NotAllowedError'));

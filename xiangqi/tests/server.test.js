@@ -202,6 +202,26 @@ test('bundled collision sound serves the uploaded MP3 bytes, MIME, HEAD and rang
   assert.equal(Buffer.from(await partial.arrayBuffer()).equals(expected.subarray(0, 32)), true);
 });
 
+test('bundled capture taunt serves the uploaded WAV recording with audio MIME and byte ranges', async t => {
+  const f = await fixture(t);
+  const expected = await readFile(new URL('../assets/capture-taunt.wav', import.meta.url));
+  const url = f.origin + '/assets/capture-taunt.wav';
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Content-Type'), 'audio/wav');
+  assert.equal(Number(response.headers.get('Content-Length')), expected.length);
+  assert.equal(Buffer.from(await response.arrayBuffer()).equals(expected), true);
+  const head = await fetch(url, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('Accept-Ranges'), 'bytes');
+  assert.equal(Number(head.headers.get('Content-Length')), expected.length);
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  const partial = await fetch(url, { headers: { Range: 'bytes=8-11' } });
+  assert.equal(partial.status, 206);
+  assert.equal(partial.headers.get('Content-Range'), `bytes 8-11/${expected.length}`);
+  assert.equal(await partial.text(), 'WAVE');
+});
+
 test('music ranges reject malformed or unsatisfiable requests without exposing private files', async t => {
   const f = await fixture(t);
   const expected = await readFile(new URL('../assets/check-march.m4a', import.meta.url));

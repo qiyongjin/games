@@ -1,9 +1,11 @@
+import { createMoveSound } from './move-sound.js';
+
 export const CAPTURE_TAUNT = '哥们，菜你就多练';
+export const CAPTURE_SOUND_URL = '/assets/capture-taunt.wav';
 
 /** Event audio never queues missed moves or assumes a particular music recording. */
 export function createBattleAudio({
-  speechSynthesis = globalThis.speechSynthesis,
-  utteranceFactory = text => new globalThis.SpeechSynthesisUtterance(text),
+  captureSound = createMoveSound({ audioUrl: CAPTURE_SOUND_URL }),
   audioFactory = () => new globalThis.Audio(),
   createObjectURL = file => globalThis.URL.createObjectURL(file),
   revokeObjectURL = url => globalThis.URL.revokeObjectURL(url),
@@ -20,7 +22,7 @@ export function createBattleAudio({
   let musicName = '';
   let ownedURL = null;
   let activeMusic = null;
-  let activeSpeech = null;
+  let captureOperation = 0;
   let context = null;
   let graph = null;
   let fade = null;
@@ -102,9 +104,9 @@ export function createBattleAudio({
     }
   }
 
-  function stopSpeech() {
-    activeSpeech = null;
-    try { speechSynthesis?.cancel(); } catch { /* Speech is best effort. */ }
+  function stopCapture() {
+    captureOperation += 1;
+    captureSound.stop();
   }
 
   function stop() {
@@ -113,7 +115,7 @@ export function createBattleAudio({
     pause(music);
     if (music) music.loop = false;
     restoreVolume();
-    stopSpeech();
+    stopCapture();
   }
 
   function releaseMusic() {
@@ -204,48 +206,44 @@ export function createBattleAudio({
 
   function unlock() {
     if (!enabled) return false;
-    // Record a real gesture without playing a queued taunt or silently starting
-    // the selected song. A music preview can call check() in that same gesture.
+    // Both samplers are unlocked in the gesture; missed captures never replay
+    // when decoding or output permission finishes later.
     unlocked = true;
     prepareGraph();
     if (context && context.state !== 'running' && context.state !== 'closed') {
       try { void context.resume().catch(() => {}); } catch { /* A later gesture can retry. */ }
     }
-    try { speechSynthesis?.getVoices(); } catch { /* Voice discovery can fail. */ }
+    const operation = ++captureOperation;
+    void Promise.resolve(captureSound.unlock()).then(ready => {
+      if (operation !== captureOperation || !enabled) return;
+      notify(ready ? 'capture-ready' : 'capture-unavailable', ready ? '' : '嘲讽音频暂未就绪，请再次点击页面开启声音。');
+    }).catch(() => {
+      if (operation === captureOperation && enabled) notify('capture-unavailable', '嘲讽音频暂时无法播放，吃子文字提示仍会显示。');
+    });
     return true;
   }
 
-  function capture() {
-    if (!enabled || !unlocked || !speechSynthesis?.speak) return false;
+  async function preload() {
+    const operation = captureOperation;
     try {
-      const utterance = utteranceFactory(CAPTURE_TAUNT);
-      if (!utterance) return false;
-      const voices = speechSynthesis.getVoices?.() || [];
-      const chinese = voices.filter(voice => /^zh(?:[-_]|$)/i.test(voice.lang || ''));
-      const voice = chinese.find(candidate => /^zh[-_]CN$/i.test(candidate.lang)) || chinese[0];
-      // Empty lists can mean that voices have not loaded yet: requesting zh-CN
-      // lets the browser choose its native voice, with no delayed replay later.
-      if (voices.length && !voice) {
-        notify('speech-unavailable', '此设备没有中文语音，吃子文字提示仍会显示。');
-        return false;
-      }
-      if (voice) utterance.voice = voice;
-      utterance.lang = voice?.lang || 'zh-CN';
-      utterance.rate = 1.08;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-      stopSpeech();
-      activeSpeech = utterance;
-      utterance.onend = () => { if (activeSpeech === utterance) activeSpeech = null; };
-      utterance.onerror = () => {
-        if (activeSpeech !== utterance) return;
-        activeSpeech = null;
-        notify('speech-unavailable', '此设备暂时无法朗读，吃子文字提示仍会显示。');
-      };
-      speechSynthesis.speak(utterance);
-      return true;
+      const ready = await captureSound.preload();
+      if (!ready && operation === captureOperation) notify('capture-unavailable', '嘲讽音频暂时无法加载，吃子文字提示仍会显示。');
+      return ready;
     } catch {
-      activeSpeech = null;
+      if (operation === captureOperation) notify('capture-unavailable', '嘲讽音频暂时无法加载，吃子文字提示仍会显示。');
+      return false;
+    }
+  }
+
+  function capture() {
+    if (!enabled || !unlocked) return false;
+    try {
+      stopCapture();
+      const played = !!captureSound.play();
+      if (!played) notify('capture-unavailable', '嘲讽音频暂未就绪，吃子文字提示仍会显示。');
+      return played;
+    } catch {
+      notify('capture-unavailable', '嘲讽音频暂时无法播放，吃子文字提示仍会显示。');
       return false;
     }
   }
@@ -333,6 +331,7 @@ export function createBattleAudio({
   }
 
   return {
+    preload,
     unlock,
     capture,
     check,
@@ -343,12 +342,14 @@ export function createBattleAudio({
     setMusicSource,
     setEnabled(value) {
       enabled = !!value;
+      captureSound.setEnabled(enabled);
       if (!enabled) stop();
     },
     dispose() {
       stop();
       releaseMusic();
       unlocked = false;
+      try { void Promise.resolve(captureSound.dispose()).catch(() => {}); } catch { /* Optional sample cleanup. */ }
       const previous = context;
       context = null;
       try { void previous?.close()?.catch(() => {}); } catch { /* Context cleanup is optional. */ }
@@ -357,7 +358,6 @@ export function createBattleAudio({
     get musicReady() { return !!music && !!source; },
     get musicName() { return musicName; },
     get isPlaying() { return !!activeMusic || !!fade; },
-    get speechAvailable() { return !!speechSynthesis?.speak; },
   };
 }
 

@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
 
-test('standalone build retains both bundled audio files and deployment files', async t => {
+test('standalone build retains all bundled audio files and deployment files', async t => {
   const root = await mkdtemp(join(tmpdir(), 'yibu-build-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const name of ['index.html', 'styles.css', 'admin.html', 'admin.css', 'package.json', 'assets', 'src', 'scripts', 'deploy']) {
@@ -22,6 +22,11 @@ test('standalone build retains both bundled audio files and deployment files', a
   const collision = await readFile(join(root, 'assets', 'move-collision.mp3'));
   const builtCollision = await readFile(join(root, 'dist', 'assets', 'move-collision.mp3'));
   assert.equal(builtCollision.equals(collision), true);
+  const taunt = await readFile(join(root, 'assets', 'capture-taunt.wav'));
+  const builtTaunt = await readFile(join(root, 'dist', 'assets', 'capture-taunt.wav'));
+  assert.equal(builtTaunt.equals(taunt), true);
+  assert.equal(builtTaunt.subarray(0, 4).toString(), 'RIFF');
+  assert.equal(builtTaunt.subarray(8, 12).toString(), 'WAVE');
   for (const path of ['src/battle-audio.js', 'scripts/server.mjs', 'scripts/serve.mjs', 'deploy/install.sh']) {
     assert.equal((await stat(join(root, 'dist', path))).isFile(), true, path);
   }

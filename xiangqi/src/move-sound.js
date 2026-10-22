@@ -151,6 +151,12 @@ export function createMoveSound({
     for (const active of activeSounds) stopSound(active);
   }
 
+  function stop() {
+    revision += 1;
+    previewRevision += 1;
+    stopActiveSounds();
+  }
+
   async function dispose() {
     revision += 1;
     previewRevision += 1;
@@ -165,7 +171,7 @@ export function createMoveSound({
   }
 
   return {
-    preload, unlock, play, dispose,
+    preload, unlock, play, stop, dispose,
     setEnabled(value) {
       enabled = !!value;
       if (!enabled) { revision += 1; stopActiveSounds(); }

@@ -1,21 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CAPTURE_TAUNT, createBattleAudio } from '../src/battle-audio.js';
+import { CAPTURE_SOUND_URL, createBattleAudio } from '../src/battle-audio.js';
+import { createMoveSound } from '../src/move-sound.js';
 
-function fixture({ voices = [{ lang: 'en-US' }, { lang: 'zh-TW' }, { lang: 'zh-CN' }], play, ...options } = {}) {
-  const utterances = [];
-  const speech = {
-    cancellations: 0,
-    getVoices: () => voices,
-    cancel() { this.cancellations++; },
-    speak(utterance) { utterances.push(utterance); },
+function fixture({ play, ...options } = {}) {
+  const sample = {
+    enabled: true, ready: true, unlocked: false, active: false, plays: 0, stops: 0, preloads: 0, disposals: 0,
+    preload() { this.preloads++; return Promise.resolve(this.ready); },
+    unlock() { this.unlocked = true; return Promise.resolve(this.ready); },
+    play() {
+      if (!this.enabled || !this.unlocked || !this.ready) return false;
+      this.plays++; this.active = true; return true;
+    },
+    stop() { this.stops++; this.active = false; },
+    dispose() { this.disposals++; this.active = false; return Promise.resolve(); },
+    setEnabled(value) { this.enabled = value; if (!value) this.active = false; },
   };
   const tracks = [];
   const revoked = [];
   const statuses = [];
   const audio = createBattleAudio({
-    speechSynthesis: speech,
-    utteranceFactory: text => ({ text }),
+    captureSound: sample,
     audioFactory: () => {
       const track = {
         paused: true, currentTime: 0, plays: 0, pauses: 0,
@@ -32,23 +37,60 @@ function fixture({ voices = [{ lang: 'en-US' }, { lang: 'zh-TW' }, { lang: 'zh-C
     onStatus: status => statuses.push(status),
     ...options,
   });
-  return { audio, speech, utterances, tracks, revoked, statuses };
+  return { audio, sample, tracks, revoked, statuses };
 }
 
-test('capture speaks the exact taunt in Chinese only after a gesture and does not queue missed captures', () => {
+test('capture plays only the uploaded recording after a gesture and restarts repeated taunts', async () => {
   const f = fixture();
+  assert.equal(await f.audio.preload(), true);
+  assert.equal(f.sample.preloads, 1);
   assert.equal(f.audio.capture(), false);
-  assert.equal(f.utterances.length, 0);
+  assert.equal(f.sample.plays, 0);
   f.audio.unlock();
-  assert.equal(f.utterances.length, 0);
+  assert.equal(f.sample.plays, 0);
   assert.equal(f.audio.capture(), true);
-  assert.equal(f.utterances[0].text, '哥们，菜你就多练');
-  assert.equal(f.utterances[0].text, CAPTURE_TAUNT);
-  assert.equal(f.utterances[0].lang, 'zh-CN');
-  assert.equal(f.utterances[0].voice.lang, 'zh-CN');
+  assert.equal(f.sample.plays, 1);
+  assert.equal(f.sample.active, true);
   f.audio.capture();
-  assert.equal(f.utterances.length, 2);
-  assert.equal(f.speech.cancellations, 2);
+  assert.equal(f.sample.plays, 2);
+  assert.equal(f.sample.stops, 2, 'a repeated capture stops the previous clip instead of overlapping');
+});
+
+test('the shared sampler decodes the uploaded WAV bytes and never invents a speech fallback', async () => {
+  const encoded = Uint8Array.from([82, 73, 70, 70, 0, 0, 87, 65, 86, 69]).buffer;
+  const decoded = { length: 1000, sampleRate: 44100 };
+  const requests = [], decodes = [], sources = [];
+  const context = {
+    state: 'running', sampleRate: 44100, destination: {},
+    createBuffer: () => ({ length: 1 }),
+    decodeAudioData(bytes) { decodes.push(bytes); return Promise.resolve(decoded); },
+    createBufferSource() {
+      const source = { connect() {}, disconnect() {}, start() {}, stop() { this.stopped = true; } };
+      sources.push(source); return source;
+    },
+    createGain: () => ({ gain: {}, connect() {}, disconnect() {} }),
+    close() { this.state = 'closed'; return Promise.resolve(); },
+  };
+  const sampler = createMoveSound({
+    audioUrl: CAPTURE_SOUND_URL,
+    audioContextFactory: () => context,
+    fetchAudio: async url => { requests.push(url); return { ok: true, arrayBuffer: async () => encoded }; },
+  });
+  const f = fixture({ captureSound: sampler });
+  assert.equal(await f.audio.preload(), true);
+  assert.deepEqual(requests, ['/assets/capture-taunt.wav']);
+  f.audio.unlock();
+  await sampler.unlock();
+  assert.deepEqual(decodes, [encoded]);
+  assert.equal(sources.filter(source => source.buffer === decoded).length, 0);
+  assert.equal(f.audio.capture(), true);
+  const first = sources.find(source => source.buffer === decoded);
+  assert.ok(first);
+  assert.equal(f.audio.capture(), true);
+  assert.equal(first.stopped, true);
+  assert.equal(sources.filter(source => source.buffer === decoded).length, 2);
+  f.audio.dispose();
+  assert.equal(context.state, 'closed');
 });
 
 function clock() {
@@ -261,20 +303,20 @@ test('failed gain setup preserves an audible fallback and cleans partial graph c
   });
 });
 
-test('missing Chinese voices and unsupported speech preserve the silent fallback', () => {
-  const f = fixture({ voices: [{ lang: 'en-US' }] });
+test('unavailable capture audio stays silent and loading never replays a missed capture', async () => {
+  const f = fixture();
+  f.sample.ready = false;
+  assert.equal(await f.audio.preload(), false);
+  assert.equal(f.statuses.at(-1).state, 'capture-unavailable');
   f.audio.unlock();
   assert.equal(f.audio.capture(), false);
-  assert.equal(f.utterances.length, 0);
-  assert.equal(f.statuses.at(-1).state, 'speech-unavailable');
-  const unsupported = createBattleAudio({ speechSynthesis: null });
-  unsupported.unlock();
-  assert.equal(unsupported.capture(), false);
-  assert.equal(unsupported.speechAvailable, false);
-  const loading = fixture({ voices: [] });
-  loading.audio.unlock();
-  assert.equal(loading.audio.capture(), true);
-  assert.equal(loading.utterances[0].lang, 'zh-CN');
+  assert.equal(f.sample.plays, 0);
+  f.sample.ready = true;
+  f.audio.unlock();
+  await Promise.resolve();
+  assert.equal(f.sample.plays, 0);
+  assert.equal(f.audio.capture(), true);
+  assert.equal(f.sample.plays, 1);
 });
 
 test('check plays only an explicitly selected track, without starting music on unlock or capture', async () => {
@@ -295,7 +337,7 @@ test('check plays only an explicitly selected track, without starting music on u
   assert.equal(f.tracks[0].plays, 2);
 });
 
-test('mute stops speech and music immediately and blocks new effects until reenabled', async () => {
+test('mute stops recorded taunts and music immediately and blocks new effects until reenabled', async () => {
   const f = fixture();
   f.audio.setMusicFile({ name: '关中王进行曲.mp3', type: 'audio/mpeg' });
   f.audio.unlock();
@@ -304,13 +346,37 @@ test('mute stops speech and music immediately and blocks new effects until reena
   f.audio.setEnabled(false);
   assert.equal(f.tracks[0].paused, true);
   assert.equal(f.tracks[0].currentTime, 0);
-  assert.equal(f.speech.cancellations, 2);
+  assert.equal(f.sample.active, false);
+  assert.equal(f.sample.enabled, false);
   assert.equal(f.audio.unlock(), false);
   assert.equal(f.audio.capture(), false);
   assert.equal(await f.audio.check(), false);
   assert.equal(f.tracks[0].plays, 1);
   f.audio.setEnabled(true);
+  assert.equal(f.sample.enabled, true);
   assert.equal(await f.audio.check(), true);
+});
+
+test('music fading does not cut the capture recording, while reset and disposal do', async () => {
+  const time = clock();
+  const f = fixture(time);
+  f.audio.setMusicSource('/assets/check-march.m4a');
+  f.audio.unlock();
+  await f.audio.check({ loop: true });
+  f.audio.capture();
+  const stops = f.sample.stops;
+  const fading = f.audio.fadeOut();
+  time.advance(1500);
+  assert.equal(await fading, true);
+  assert.equal(f.sample.active, true);
+  assert.equal(f.sample.stops, stops);
+  f.audio.reset();
+  assert.equal(f.sample.active, false);
+  f.audio.capture();
+  assert.equal(f.sample.active, true);
+  f.audio.dispose();
+  assert.equal(f.sample.active, false);
+  assert.equal(f.sample.disposals, 1);
 });
 
 test('reset cancels a pending play so late permission cannot resurrect music', async () => {
