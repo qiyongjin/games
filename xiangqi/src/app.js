@@ -284,7 +284,7 @@ function handleBattleAnnouncement({ kind, text, type, side }) {
   banner.hidden = false;
   for (const animation of banner.getAnimations?.() ?? []) animation.cancel();
   if (typeof banner.animate === 'function' && !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-    banner.animate([{ opacity: 0, transform: 'translate(-50%, 8px) scale(.86)' }, { opacity: 1, transform: 'translate(-50%, 0) scale(1)' }], { duration: 260, easing: 'cubic-bezier(.16,1,.3,1)' });
+    banner.animate([{ opacity: 0, transform: 'translateY(8px) scale(.95)' }, { opacity: 1, transform: 'translateY(0) scale(1)' }], { duration: 260, easing: 'cubic-bezier(.16,1,.3,1)' });
   }
   clearTimeout(battleNoticeTimer);
   battleNoticeTimer = setTimeout(() => { banner.hidden = true; }, kind === 'check' ? 2800 : 2400);
